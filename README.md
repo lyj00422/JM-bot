@@ -9,6 +9,7 @@
 - 图片递归收集并生成 `data/output/JM<id>.pdf`
 - 异步任务队列和重复任务拦截
 - NoneBot2 + OneBot v11 群文件上传入口
+- QQ 群聊和机器人好友私聊都可使用 `/jm <数字ID>`
 
 ## 安装
 
@@ -49,7 +50,7 @@ $env:JM_BOT_GROUP_FOLDER = "JM"
 python main.py
 ```
 
-`JM_BOT_ALLOWED_GROUPS` 为空时，所有群都可用。填了以后，只有列表里的群号可用。
+`JM_BOT_ALLOWED_GROUPS` 为空时，所有群都可用。填了以后，只有列表里的群号可用。好友私聊不受群白名单限制，但必须是机器人 QQ 好友。
 
 `JM_BOT_CLEAN_AFTER_UPLOAD=true` 时，PDF 成功上传到群后会删除本地图片目录和 PDF。上传失败时不会删除，方便排查。
 
@@ -93,6 +94,12 @@ python main.py
 ```
 
 5. 把机器人 QQ 拉进群，在群里发送：
+
+```text
+/jm 350234
+```
+
+也可以添加机器人 QQ 为好友后，直接私聊发送同样的命令：
 
 ```text
 /jm 350234

@@ -45,6 +45,18 @@ async def upload_group_pdf(bot: ApiBot, group_id: int, file_path: str | Path, fo
     )
 
 
+async def upload_private_pdf(bot: ApiBot, user_id: int, file_path: str | Path) -> None:
+    """Upload the generated PDF to a QQ friend private chat."""
+
+    path = Path(file_path)
+    await bot.call_api(
+        "upload_private_file",
+        user_id=user_id,
+        file=str(path.resolve()),
+        name=path.name,
+    )
+
+
 async def _find_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> str | None:
     """读取群文件根目录，按文件夹名称查找 QQ 返回的 folder_id。"""
 

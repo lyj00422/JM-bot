@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.sender import ensure_group_folder, upload_group_pdf
+from core.sender import ensure_group_folder, upload_group_pdf, upload_private_pdf
 
 
 class FakeBot:
@@ -25,7 +25,7 @@ class FakeBot:
             )
             return None
 
-        if action == "upload_group_file":
+        if action in {"upload_group_file", "upload_private_file"}:
             return None
 
         raise AssertionError(f"Unexpected action: {action}")
@@ -75,6 +75,26 @@ class SenderTest(unittest.IsolatedAsyncioTestCase):
                     "file": str(pdf_path.resolve()),
                     "name": "JM1949101.pdf",
                     "folder": "abc",
+                },
+            ),
+        )
+
+    async def test_upload_private_pdf_uploads_to_friend(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "JM1949101.pdf"
+            pdf_path.write_bytes(b"pdf")
+
+            await upload_private_pdf(bot, 2661195769, pdf_path)
+
+        self.assertEqual(
+            bot.calls[-1],
+            (
+                "upload_private_file",
+                {
+                    "user_id": 2661195769,
+                    "file": str(pdf_path.resolve()),
+                    "name": "JM1949101.pdf",
                 },
             ),
         )
