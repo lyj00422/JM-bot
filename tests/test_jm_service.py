@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from core.jm_service import DownloadSettings, create_pdf_for_album, download_comic
+from jmbot.core.jm_service import DownloadSettings, create_pdf_for_album, download_comic
 
 
 class JmServiceTest(unittest.TestCase):

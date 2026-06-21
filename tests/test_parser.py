@@ -1,6 +1,6 @@
 import unittest
 
-from core.parser import parse_jm_command
+from jmbot.core.parser import parse_jm_command
 
 
 class ParseJmCommandTest(unittest.TestCase):

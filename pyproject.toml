@@ -1,0 +1,9 @@
+[project]
+name = "jmbot"
+version = "0.1.0"
+description = "QQ JMComic bot powered by NoneBot and OneBot v11"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

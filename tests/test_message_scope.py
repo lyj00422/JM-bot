@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from core.message_scope import is_friend_private_message
+from jmbot.core.message_scope import is_friend_private_message
 
 
 class MessageScopeTest(unittest.TestCase):

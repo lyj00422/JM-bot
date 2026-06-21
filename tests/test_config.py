@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from config import load_config, parse_int_set
+from jmbot.config import load_config, parse_int_set
 
 
 class ConfigTest(unittest.TestCase):

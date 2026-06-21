@@ -1,6 +1,12 @@
-from bot import main
+from pathlib import Path
+import sys
 
 
-# 项目启动入口。真正的机器人逻辑在 bot.py，这里只负责调用 main()。
+project_root = Path(__file__).resolve().parent
+sys.path.insert(0, str(project_root / "src"))
+
+from jmbot.bot import main
+
+
 if __name__ == "__main__":
     main()

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.cleanup import cleanup_album_files
+from jmbot.core.cleanup import cleanup_album_files
 
 
 class CleanupTest(unittest.TestCase):

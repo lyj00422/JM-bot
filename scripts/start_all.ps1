@@ -7,8 +7,9 @@ $ErrorActionPreference = "Stop"
 # Fixed launcher paths. The desktop .bat only calls this script.
 $napcatDir = "D:\Downlock-of-Edge\NapCat.Shell.Windows.OneKey\NapCat.44498.Shell"
 $napcatScript = Join-Path $napcatDir "napcat.quick.bat"
-$botDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$botScript = Join-Path $botDir "start_bot.ps1"
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$botDir = Split-Path -Parent $scriptRoot
+$botScript = Join-Path $scriptRoot "start_bot.ps1"
 $botPort = 8080
 $logDir = Join-Path $env:USERPROFILE "Desktop\JM\logs"
 $logPath = Join-Path $logDir ("JMbot-start-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))

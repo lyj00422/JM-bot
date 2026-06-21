@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from core.task_runner import DuplicateTaskError, TaskRunner
+from jmbot.core.task_runner import DuplicateTaskError, TaskRunner
 
 
 class TaskRunnerTest(unittest.IsolatedAsyncioTestCase):

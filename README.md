@@ -21,6 +21,15 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## 目录结构
+
+- `src/jmbot/`：机器人应用代码和核心下载、PDF、上传逻辑。
+- `tests/`：单元测试。
+- `scripts/`：本地 Windows 启动脚本。
+- `deploy/`：服务器环境变量和 systemd 服务模板。
+- `data/options/`：jmcomic 下载配置模板。
+- `docs/`：项目说明和历史实现计划。
+
 ## 启动 Bot
 
 ```powershell
@@ -60,16 +69,16 @@ python main.py
 
 仓库里提供了两个部署模板：
 
-- `env.example`：服务器环境变量模板，复制到 `/etc/jmbot.env` 后修改群号、管理员 QQ 等配置。
-- `jmbot.service.example`：systemd 服务模板，复制到 `/etc/systemd/system/jmbot.service` 后按服务器路径调整。
+- `deploy/env.example`：服务器环境变量模板，复制到 `/etc/jmbot.env` 后修改群号、管理员 QQ 等配置。
+- `deploy/jmbot.service.example`：systemd 服务模板，复制到 `/etc/systemd/system/jmbot.service` 后按服务器路径调整。
 
 示例：
 
 ```bash
-sudo cp env.example /etc/jmbot.env
+sudo cp deploy/env.example /etc/jmbot.env
 sudo nano /etc/jmbot.env
 
-sudo cp jmbot.service.example /etc/systemd/system/jmbot.service
+sudo cp deploy/jmbot.service.example /etc/systemd/system/jmbot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now jmbot
 sudo journalctl -u jmbot -f

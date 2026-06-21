@@ -8,13 +8,13 @@ from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 from nonebot.rule import Rule
 
-from config import load_config
-from core.cleanup import cleanup_album_files
-from core.jm_service import DownloadSettings, run_album_job
-from core.message_scope import is_friend_private_message
-from core.parser import parse_jm_command
-from core.sender import upload_group_pdf, upload_private_pdf
-from core.task_runner import DuplicateTaskError, TaskRunner
+from jmbot.config import load_config
+from jmbot.core.cleanup import cleanup_album_files
+from jmbot.core.jm_service import DownloadSettings, run_album_job
+from jmbot.core.message_scope import is_friend_private_message
+from jmbot.core.parser import parse_jm_command
+from jmbot.core.sender import upload_group_pdf, upload_private_pdf
+from jmbot.core.task_runner import DuplicateTaskError, TaskRunner
 
 
 # bot.py 是 QQ 消息进入项目后的核心入口：

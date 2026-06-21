@@ -6,7 +6,7 @@ from typing import Callable, Protocol
 
 import jmcomic
 
-from core.pdf_builder import build_pdf, collect_images
+from jmbot.core.pdf_builder import build_pdf, collect_images
 
 
 class CreateOption(Protocol):

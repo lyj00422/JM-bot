@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.sender import ensure_group_folder, upload_group_pdf, upload_private_pdf
+from jmbot.core.sender import ensure_group_folder, upload_group_pdf, upload_private_pdf
 
 
 class FakeBot:

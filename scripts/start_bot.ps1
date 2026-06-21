@@ -8,7 +8,8 @@ $env:JM_BOT_CLEAN_AFTER_UPLOAD = "true"
 $env:JM_BOT_GROUP_FOLDER = "JM"
 $env:JM_BOT_MAX_CONCURRENCY = "2"
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $scriptRoot
 Set-Location $projectRoot
 
 # Prefer the project virtual environment over any system Python.

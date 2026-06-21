@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from core.pdf_builder import build_pdf, collect_images
+from jmbot.core.pdf_builder import build_pdf, collect_images
 
 
 def make_image(path: Path, color: tuple[int, int, int]) -> None:

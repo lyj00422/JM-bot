@@ -8,7 +8,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class BotConfig:
-    """机器人运行配置，主要来自 start_bot.ps1 设置的环境变量。"""
+    """机器人运行配置，主要来自 scripts/start_bot.ps1 设置的环境变量。"""
 
     host: str
     port: int

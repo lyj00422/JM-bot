@@ -21,7 +21,7 @@
 - [x] **Step 1: Write failing parser tests**
 
 ```python
-from core.parser import parse_jm_command
+from jmbot.core.parser import parse_jm_command
 
 def test_parse_valid_jm_command():
     assert parse_jm_command("/jm 123456").album_id == "123456"
@@ -33,7 +33,7 @@ def test_parse_rejects_invalid_id():
 - [x] **Step 2: Write failing PDF tests**
 
 ```python
-from core.pdf_builder import collect_images, build_pdf
+from jmbot.core.pdf_builder import collect_images, build_pdf
 
 def test_collect_images_orders_nested_numeric_files(tmp_path):
     assert [p.name for p in collect_images(tmp_path)] == ["001.jpg", "002.png"]
