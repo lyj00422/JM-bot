@@ -55,6 +55,25 @@ python main.py
 
 `JM_BOT_GROUP_FOLDER=JM` 时，PDF 会上传到 QQ 群文件里的 `JM` 文件夹；如果群里没有该文件夹，机器人会先创建。
 
+## 服务器部署模板
+
+仓库里提供了两个部署模板：
+
+- `env.example`：服务器环境变量模板，复制到 `/etc/jmbot.env` 后修改群号、管理员 QQ 等配置。
+- `jmbot.service.example`：systemd 服务模板，复制到 `/etc/systemd/system/jmbot.service` 后按服务器路径调整。
+
+示例：
+
+```bash
+sudo cp env.example /etc/jmbot.env
+sudo nano /etc/jmbot.env
+
+sudo cp jmbot.service.example /etc/systemd/system/jmbot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now jmbot
+sudo journalctl -u jmbot -f
+```
+
 ## QQ 群接入步骤
 
 你自己配置 QQ 侧即可，推荐 NapCat：
