@@ -1,2 +1,2 @@
 # JM-bot
-用codex以基于mcomic库写的JM bot
+用codex基于mcomic库写的JM bot
