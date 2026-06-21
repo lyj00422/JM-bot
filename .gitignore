@@ -1,0 +1,13 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+logs/
+data/downloads/
+data/output/
+
+JM-bot/
+JMbot.tar.gz
