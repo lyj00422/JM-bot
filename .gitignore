@@ -12,6 +12,8 @@ logs/
 data/downloads/
 data/options/
 data/output/
+data/*.sqlite3
+data/*.sqlite3-*
 
 JM-bot/
 JMbot.tar.gz
