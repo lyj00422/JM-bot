@@ -9,7 +9,7 @@ T = TypeVar("T")
 
 
 class DuplicateTaskError(RuntimeError):
-    """同一本漫画已经在处理时抛出，避免重复下载同一个任务。"""
+    """Raised when the same album is already being processed."""
 
     def __init__(self, album_id: str):
         super().__init__(f"JM{album_id} is already running")
@@ -17,7 +17,7 @@ class DuplicateTaskError(RuntimeError):
 
 
 class TaskRunner:
-    """控制下载并发，并记录正在处理的 album_id。"""
+    """Limit job concurrency and reject duplicate in-flight album IDs."""
 
     def __init__(self, max_concurrency: int = 1):
         if max_concurrency < 1:
@@ -28,8 +28,6 @@ class TaskRunner:
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def submit(self, album_id: str, job: Callable[[], Awaitable[T]]) -> T:
-        """提交一个异步任务；重复 album_id 会被拒绝，并发数量由 semaphore 限制。"""
-
         async with self._lock:
             if album_id in self._active_ids:
                 raise DuplicateTaskError(album_id)

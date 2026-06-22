@@ -8,7 +8,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class BotConfig:
-    """机器人运行配置，主要来自 scripts/start_bot.ps1 设置的环境变量。"""
+    """Runtime configuration loaded from environment variables."""
 
     host: str
     port: int
@@ -17,6 +17,10 @@ class BotConfig:
     output_root: Path
     option_root: Path
     max_concurrency: int
+    download_image_threads: int
+    download_photo_threads: int
+    jmcomic_log: bool
+    jmcomic_retry_times: int
     allowed_group_ids: set[int]
     superuser_ids: set[int]
     clean_after_upload: bool
@@ -24,7 +28,7 @@ class BotConfig:
 
 
 def parse_int_set(value: str | None) -> set[int]:
-    """把类似 "10001,10002" 的环境变量解析成整数集合。"""
+    """Parse comma-separated integer IDs from an environment variable."""
 
     if value is None or value.strip() == "":
         return set()
@@ -40,7 +44,7 @@ def parse_int_set(value: str | None) -> set[int]:
 
 
 def parse_bool(value: str | None, default: bool) -> bool:
-    """解析开关类环境变量，支持 true/false、yes/no、1/0 等写法。"""
+    """Parse common boolean spellings from an environment variable."""
 
     if value is None or value.strip() == "":
         return default
@@ -54,13 +58,17 @@ def parse_bool(value: str | None, default: bool) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
+def parse_positive_int(source: Mapping[str, str], name: str, default: int) -> int:
+    value = int(source.get(name, str(default)))
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return value
+
+
 def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
-    """从环境变量读取配置；测试时可以传入 env 字典来模拟环境。"""
+    """Load configuration from environment variables."""
 
     source = env if env is not None else os.environ
-    max_concurrency = int(source.get("JM_BOT_MAX_CONCURRENCY", "1"))
-    if max_concurrency < 1:
-        raise ValueError("JM_BOT_MAX_CONCURRENCY must be at least 1")
 
     return BotConfig(
         host=source.get("JM_BOT_HOST", "127.0.0.1"),
@@ -69,7 +77,11 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         download_root=Path(source.get("JM_BOT_DOWNLOAD_ROOT", "data/downloads")),
         output_root=Path(source.get("JM_BOT_OUTPUT_ROOT", "data/output")),
         option_root=Path(source.get("JM_BOT_OPTION_ROOT", "data/options")),
-        max_concurrency=max_concurrency,
+        max_concurrency=parse_positive_int(source, "JM_BOT_MAX_CONCURRENCY", 1),
+        download_image_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_IMAGE_THREADS", 10),
+        download_photo_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_PHOTO_THREADS", 2),
+        jmcomic_log=parse_bool(source.get("JM_BOT_JMCOMIC_LOG"), True),
+        jmcomic_retry_times=parse_positive_int(source, "JM_BOT_JMCOMIC_RETRY_TIMES", 5),
         allowed_group_ids=parse_int_set(source.get("JM_BOT_ALLOWED_GROUPS")),
         superuser_ids=parse_int_set(source.get("JM_BOT_SUPERUSERS")),
         clean_after_upload=parse_bool(source.get("JM_BOT_CLEAN_AFTER_UPLOAD"), True),

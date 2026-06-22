@@ -10,7 +10,7 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 def _natural_key(path: Path) -> list[int | str]:
-    """自然排序键：让 2.jpg 排在 10.jpg 前面，避免 PDF 页码顺序错乱。"""
+    """Sort numeric path parts naturally, so 2.jpg comes before 10.jpg."""
 
     return [
         int(part) if part.isdigit() else part.lower()
@@ -19,7 +19,7 @@ def _natural_key(path: Path) -> list[int | str]:
 
 
 def collect_images(root: str | Path) -> list[Path]:
-    """递归收集漫画目录中的图片，并按自然顺序排列。"""
+    """Collect supported image files recursively in natural order."""
 
     root_path = Path(root)
     if not root_path.exists():
@@ -36,7 +36,7 @@ def collect_images(root: str | Path) -> list[Path]:
 
 
 def build_pdf(image_root: str | Path, out_pdf: str | Path) -> Path:
-    """使用 Pillow 将多张图片合成为一个 PDF。"""
+    """Use Pillow to combine album images into a single PDF."""
 
     images = collect_images(image_root)
     if not images:
@@ -57,7 +57,7 @@ def build_pdf(image_root: str | Path, out_pdf: str | Path) -> Path:
 
 
 def _open_rgb(path: Path) -> Image.Image:
-    """Pillow 保存 PDF 需要 RGB 图片；其它模式先转换再写入。"""
+    """Return a standalone RGB image object that can be safely saved to PDF."""
 
     image = Image.open(path)
     if image.mode == "RGB":

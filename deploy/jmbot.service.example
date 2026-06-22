@@ -11,7 +11,7 @@ ExecStart=/opt/jmbot/.venv/bin/python /opt/jmbot/main.py
 Restart=always
 RestartSec=5
 
-# For production, create a dedicated user and replace this.
+# Create a dedicated service user for production and replace this value.
 User=root
 
 [Install]

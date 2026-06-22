@@ -2,12 +2,15 @@
 .idea/
 .pytest_cache/
 __pycache__/
+.env
+scripts/local.env
 *.pyc
 *.pyo
 *.log
 
 logs/
 data/downloads/
+data/options/
 data/output/
 
 JM-bot/

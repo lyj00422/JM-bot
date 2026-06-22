@@ -5,13 +5,13 @@ from typing import Any, Protocol
 
 
 class ApiBot(Protocol):
-    """只声明本模块需要的 NoneBot Bot 能力：调用 OneBot API。"""
+    """Subset of the NoneBot Bot API used by this module."""
 
     async def call_api(self, action: str, **params: Any) -> Any: ...
 
 
 async def ensure_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> str:
-    """确保 QQ 群文件中存在目标文件夹，返回该文件夹 ID。"""
+    """Ensure the target QQ group file folder exists and return its ID."""
 
     existing = await _find_group_folder(bot, group_id, folder_name)
     if existing is not None:
@@ -26,13 +26,13 @@ async def ensure_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> s
 
     created = await _find_group_folder(bot, group_id, folder_name)
     if created is None:
-        raise RuntimeError(f"创建群文件夹失败或无法读取文件夹 ID：{folder_name}")
+        raise RuntimeError(f"创建群文件夹失败，或无法读取文件夹 ID：{folder_name}")
 
     return created
 
 
 async def upload_group_pdf(bot: ApiBot, group_id: int, file_path: str | Path, folder_name: str) -> None:
-    """把生成好的 PDF 上传到指定 QQ 群文件夹。"""
+    """Upload the generated PDF to a QQ group file folder."""
 
     path = Path(file_path)
     folder_id = await ensure_group_folder(bot, group_id, folder_name)
@@ -58,7 +58,7 @@ async def upload_private_pdf(bot: ApiBot, user_id: int, file_path: str | Path) -
 
 
 async def _find_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> str | None:
-    """读取群文件根目录，按文件夹名称查找 QQ 返回的 folder_id。"""
+    """Find a QQ group file folder by name from the root folder list."""
 
     root_files = await bot.call_api("get_group_root_files", group_id=group_id)
     folders = root_files.get("folders", []) if isinstance(root_files, dict) else []

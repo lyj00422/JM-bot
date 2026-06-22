@@ -28,7 +28,14 @@ class JmServiceTest(unittest.TestCase):
 
             result = download_comic(
                 "123456",
-                DownloadSettings(download_root=root / "downloads", option_root=root / "options"),
+                DownloadSettings(
+                    download_root=root / "downloads",
+                    option_root=root / "options",
+                    download_image_threads=3,
+                    download_photo_threads=1,
+                    jmcomic_log=False,
+                    jmcomic_retry_times=2,
+                ),
                 create_option=fake_create_option,
                 download_album=fake_downloader,
             )
@@ -38,6 +45,10 @@ class JmServiceTest(unittest.TestCase):
             self.assertEqual(calls["album_id"], "123456")
             self.assertIn("base_dir:", calls["option_text"])
             self.assertIn("123456", calls["option_text"])
+            self.assertIn("log: false", calls["option_text"])
+            self.assertIn("    image: 3", calls["option_text"])
+            self.assertIn("    photo: 1", calls["option_text"])
+            self.assertIn("  retry_times: 2", calls["option_text"])
             self.assertTrue(calls["option_path"].exists())
             self.assertIs(calls["option_path_type"], str)
 

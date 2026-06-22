@@ -10,28 +10,32 @@ from jmbot.core.pdf_builder import build_pdf, collect_images
 
 
 class CreateOption(Protocol):
-    """jmcomic.create_option 的协议定义，方便测试时注入假的实现。"""
+    """Protocol for injecting jmcomic.create_option in tests."""
 
     def __call__(self, option_path: str): ...
 
 
 class DownloadAlbum(Protocol):
-    """jmcomic.download_album 的协议定义，避免业务代码直接绑死第三方库。"""
+    """Protocol for injecting jmcomic.download_album in tests."""
 
     def __call__(self, album_id: str, option): ...
 
 
 @dataclass(frozen=True)
 class DownloadSettings:
-    """下载相关目录：漫画图片目录和 jmcomic 配置文件目录。"""
+    """Download directories and jmcomic resource settings."""
 
     download_root: Path
     option_root: Path
+    download_image_threads: int = 10
+    download_photo_threads: int = 2
+    jmcomic_log: bool = True
+    jmcomic_retry_times: int = 5
 
 
 @dataclass(frozen=True)
 class DownloadResult:
-    """下载阶段的结果，不包含 PDF。"""
+    """Result of the image download stage."""
 
     album_id: str
     album_dir: Path
@@ -40,7 +44,7 @@ class DownloadResult:
 
 @dataclass(frozen=True)
 class AlbumJobResult:
-    """完整任务结果：下载目录和最终 PDF 路径。"""
+    """Complete album job result, including the generated PDF path."""
 
     album_id: str
     album_dir: Path
@@ -54,14 +58,14 @@ def download_comic(
     create_option: CreateOption = jmcomic.create_option,
     download_album: DownloadAlbum = jmcomic.download_album,
 ) -> DownloadResult:
-    """调用 jmcomic 下载指定 JM 漫画，并确认目录中确实生成了图片。"""
+    """Download one JM album and verify that image files were produced."""
 
     album_dir = settings.download_root / album_id
     album_dir.mkdir(parents=True, exist_ok=True)
     settings.option_root.mkdir(parents=True, exist_ok=True)
 
     option_path = settings.option_root / f"jm_{album_id}.yml"
-    _write_option_file(option_path, album_dir)
+    _write_option_file(option_path, album_dir, settings)
 
     option = create_option(str(option_path))
     download_album(album_id, option)
@@ -79,7 +83,7 @@ def create_pdf_for_album(
     *,
     pdf_builder: Callable[[str | Path, str | Path], Path] = build_pdf,
 ) -> Path:
-    """把已经下载好的漫画图片目录转换为单个 PDF 文件。"""
+    """Convert a downloaded album directory into a single PDF file."""
 
     output_dir = Path(output_root)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -87,22 +91,23 @@ def create_pdf_for_album(
 
 
 def run_album_job(album_id: str, download_settings: DownloadSettings, output_root: str | Path) -> AlbumJobResult:
-    """完整任务流水线：下载图片 -> 生成 PDF -> 返回路径给 QQ 上传逻辑。"""
+    """Run the full album flow: download images, create PDF, return paths."""
 
     download_result = download_comic(album_id, download_settings)
     pdf_path = create_pdf_for_album(album_id, download_result.album_dir, output_root)
     return AlbumJobResult(album_id=album_id, album_dir=download_result.album_dir, pdf_path=pdf_path)
 
 
-def _write_option_file(option_path: Path, album_dir: Path) -> None:
-    """为每次下载生成 jmcomic 配置文件，指定保存目录、线程数和访问方式。"""
+def _write_option_file(option_path: Path, album_dir: Path, settings: DownloadSettings) -> None:
+    """Write the jmcomic option file for this album download."""
 
     base_dir = album_dir.resolve().as_posix()
+    log_enabled = str(settings.jmcomic_log).lower()
     option_path.write_text(
         "\n".join(
             [
                 "version: '2.1'",
-                "log: true",
+                f"log: {log_enabled}",
                 "dir_rule:",
                 "  rule: Bd",
                 f"  base_dir: '{base_dir}'",
@@ -112,11 +117,11 @@ def _write_option_file(option_path: Path, album_dir: Path) -> None:
                 "    decode: true",
                 "    suffix: null",
                 "  threading:",
-                "    image: 10",
-                "    photo: 2",
+                f"    image: {settings.download_image_threads}",
+                f"    photo: {settings.download_photo_threads}",
                 "client:",
                 "  impl: api",
-                "  retry_times: 5",
+                f"  retry_times: {settings.jmcomic_retry_times}",
                 "  domain: []",
                 "  cache: null",
                 "  postman:",

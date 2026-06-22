@@ -6,13 +6,13 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class JmCommand:
-    """解析成功后的 JM 命令，只保存漫画 album_id。"""
+    """Parsed JM command."""
 
     album_id: str
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
-    """解析 /jm <数字ID>；不符合格式时返回 None，让其它 matcher 有机会处理。"""
+    """Parse `/jm <digits>` and return None for non-matching messages."""
 
     pattern = re.compile(rf"^\s*{re.escape(command_prefix)}\s+([0-9]+)\s*$", re.IGNORECASE)
     match = pattern.match(message)

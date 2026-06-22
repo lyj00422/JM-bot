@@ -17,16 +17,17 @@ from jmbot.core.sender import upload_group_pdf, upload_private_pdf
 from jmbot.core.task_runner import DuplicateTaskError, TaskRunner
 
 
-# bot.py 是 QQ 消息进入项目后的核心入口：
-# NoneBot 负责接收 OneBot 消息，本文件负责判断消息、调用下载逻辑、上传 PDF。
 CONFIG = load_config()
 DOWNLOAD_SETTINGS = DownloadSettings(
     download_root=CONFIG.download_root,
     option_root=CONFIG.option_root,
+    download_image_threads=CONFIG.download_image_threads,
+    download_photo_threads=CONFIG.download_photo_threads,
+    jmcomic_log=CONFIG.jmcomic_log,
+    jmcomic_retry_times=CONFIG.jmcomic_retry_times,
 )
 TASK_RUNNER = TaskRunner(max_concurrency=CONFIG.max_concurrency)
 
-# 启动 NoneBot 的 FastAPI + WebSocket 驱动，NapCat 会反向连接到这里。
 nonebot.init(
     driver="~fastapi+~websockets",
     host=CONFIG.host,
@@ -38,12 +39,11 @@ get_driver().register_adapter(OneBotV11Adapter)
 
 
 async def _is_jm_command(event: MessageEvent) -> bool:
-    """判断一条 QQ 消息是否是 /jm <数字ID> 命令。"""
+    """Return True when the incoming QQ message is a JM command."""
 
     return parse_jm_command(event.get_plaintext(), CONFIG.command_prefix) is not None
 
 
-# matcher 是 NoneBot 的消息处理器。priority 数字越小越先处理，block=True 表示命中后不再交给后续处理器。
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
 
 
@@ -56,7 +56,6 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         await jm_matcher.finish(f"请在 QQ 群或机器人好友私聊里使用 {CONFIG.command_prefix} <漫画ID>。")
         return
 
-    # 如果配置了群白名单，只有白名单里的群可以触发下载。
     if is_group_event and CONFIG.allowed_group_ids and event.group_id not in CONFIG.allowed_group_ids:
         await jm_matcher.finish("这个群还没有启用 JM 下载功能。")
         return
@@ -68,7 +67,6 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
     await jm_matcher.send(f"收到 JM{command.album_id}，开始下载并生成 PDF。")
 
     try:
-        # jmcomic 下载和 PDF 生成都是阻塞操作，放到线程里跑，避免卡住 NoneBot 事件循环。
         result = await TASK_RUNNER.submit(
             command.album_id,
             lambda: asyncio.to_thread(run_album_job, command.album_id, DOWNLOAD_SETTINGS, CONFIG.output_root),
@@ -88,6 +86,7 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
     if CONFIG.clean_after_upload:
         await asyncio.to_thread(cleanup_album_files, result.album_dir, result.pdf_path)
     await jm_matcher.finish(f"JM{command.album_id} 已上传：{result.pdf_path.name}")
+
 
 def main() -> None:
     nonebot.run()
