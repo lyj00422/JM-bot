@@ -13,8 +13,9 @@ from jmbot.core.cleanup import cleanup_album_files
 from jmbot.core.jm_service import DownloadSettings, run_album_job
 from jmbot.core.message_scope import is_friend_private_message
 from jmbot.core.parser import parse_jm_command
+from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
+from jmbot.core.queue_processor import process_next_album_job
 from jmbot.core.sender import upload_group_pdf, upload_private_pdf
-from jmbot.core.task_runner import DuplicateTaskError, TaskRunner
 
 
 CONFIG = load_config()
@@ -26,7 +27,10 @@ DOWNLOAD_SETTINGS = DownloadSettings(
     jmcomic_log=CONFIG.jmcomic_log,
     jmcomic_retry_times=CONFIG.jmcomic_retry_times,
 )
-TASK_RUNNER = TaskRunner(max_concurrency=CONFIG.max_concurrency)
+ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
+_queue_worker_lock = asyncio.Lock()
+_queue_worker_task: asyncio.Task[None] | None = None
+_queue_recovered = False
 
 nonebot.init(
     driver="~fastapi+~websockets",
@@ -35,7 +39,13 @@ nonebot.init(
     command_start={"/"},
     superusers={str(user_id) for user_id in CONFIG.superuser_ids},
 )
-get_driver().register_adapter(OneBotV11Adapter)
+DRIVER = get_driver()
+DRIVER.register_adapter(OneBotV11Adapter)
+
+
+@DRIVER.on_bot_connect
+async def _start_queue_worker_on_connect(bot: Bot) -> None:
+    await _ensure_queue_worker(bot)
 
 
 async def _is_jm_command(event: MessageEvent) -> bool:
@@ -64,28 +74,55 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
     if command is None:
         return
 
-    await jm_matcher.send(f"收到 JM{command.album_id}，开始下载并生成 PDF。")
-
-    try:
-        result = await TASK_RUNNER.submit(
-            command.album_id,
-            lambda: asyncio.to_thread(run_album_job, command.album_id, DOWNLOAD_SETTINGS, CONFIG.output_root),
-        )
-    except DuplicateTaskError:
-        await jm_matcher.finish(f"JM{command.album_id} 已在处理中，请稍等。")
-        return
-    except Exception as exc:
-        await jm_matcher.finish(f"JM{command.album_id} 处理失败：{exc}")
-        return
-
     if is_group_event:
-        await upload_group_pdf(bot, event.group_id, result.pdf_path, CONFIG.group_folder_name)
+        queued_job = ALBUM_QUEUE.enqueue_group(command.album_id, group_id=event.group_id, user_id=event.user_id)
     else:
-        await upload_private_pdf(bot, event.user_id, result.pdf_path)
+        queued_job = ALBUM_QUEUE.enqueue_private(command.album_id, user_id=event.user_id)
 
-    if CONFIG.clean_after_upload:
-        await asyncio.to_thread(cleanup_album_files, result.album_dir, result.pdf_path)
-    await jm_matcher.finish(f"JM{command.album_id} 已上传：{result.pdf_path.name}")
+    ahead_count = ALBUM_QUEUE.count_ahead(queued_job.id)
+    await jm_matcher.send(f"收到 JM{command.album_id}，已加入队列，前面还有{ahead_count}篇漫画正在处理。")
+    await _ensure_queue_worker(bot)
+
+
+async def _ensure_queue_worker(bot: Bot) -> None:
+    global _queue_recovered, _queue_worker_task
+
+    async with _queue_worker_lock:
+        if not _queue_recovered:
+            ALBUM_QUEUE.recover_interrupted_jobs()
+            _queue_recovered = True
+
+        if _queue_worker_task is None or _queue_worker_task.done():
+            _queue_worker_task = asyncio.create_task(_drain_album_queue(bot))
+
+
+async def _drain_album_queue(bot: Bot) -> None:
+    while True:
+        processed = await process_next_album_job(
+            ALBUM_QUEUE,
+            run_job=lambda album_id: asyncio.to_thread(run_album_job, album_id, DOWNLOAD_SETTINGS, CONFIG.output_root),
+            upload_group=lambda group_id, pdf_path: upload_group_pdf(
+                bot, group_id, pdf_path, CONFIG.group_folder_name
+            ),
+            upload_private=lambda user_id, pdf_path: upload_private_pdf(bot, user_id, pdf_path),
+            notify=lambda job, message: _notify_job(bot, job, message),
+            cleanup=_cleanup_job_files if CONFIG.clean_after_upload else None,
+        )
+        if not processed:
+            return
+
+
+async def _notify_job(bot: Bot, job: AlbumQueueJob, message: str) -> None:
+    if job.destination_type == "group":
+        if job.group_id is None:
+            raise ValueError(f"Group job {job.id} is missing group_id")
+        await bot.call_api("send_group_msg", group_id=job.group_id, message=message)
+    else:
+        await bot.call_api("send_private_msg", user_id=job.user_id, message=message)
+
+
+async def _cleanup_job_files(album_dir, pdf_path) -> None:
+    await asyncio.to_thread(cleanup_album_files, album_dir, pdf_path)
 
 
 def main() -> None:

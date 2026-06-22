@@ -16,6 +16,7 @@ class BotConfig:
     download_root: Path
     output_root: Path
     option_root: Path
+    queue_db_path: Path
     max_concurrency: int
     download_image_threads: int
     download_photo_threads: int
@@ -77,6 +78,7 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         download_root=Path(source.get("JM_BOT_DOWNLOAD_ROOT", "data/downloads")),
         output_root=Path(source.get("JM_BOT_OUTPUT_ROOT", "data/output")),
         option_root=Path(source.get("JM_BOT_OPTION_ROOT", "data/options")),
+        queue_db_path=Path(source.get("JM_BOT_QUEUE_DB", "data/queue.sqlite3")),
         max_concurrency=parse_positive_int(source, "JM_BOT_MAX_CONCURRENCY", 1),
         download_image_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_IMAGE_THREADS", 10),
         download_photo_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_PHOTO_THREADS", 2),

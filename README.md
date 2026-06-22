@@ -21,7 +21,9 @@ git pull origin release/aliyun-2c2g
 - 支持 QQ 群和机器人好友私聊。
 - 每个漫画 ID 使用独立下载目录：`data/downloads/<id>`。
 - 生成 PDF 到：`data/output/JM<id>.pdf`。
-- 支持重复任务拦截和任务并发限制。
+- 使用 SQLite 持久化漫画处理队列，收到请求后会提示“前面还有 xx 篇漫画正在处理”。
+- 重启后会优先恢复队列中未完成的漫画请求，并按收到时间一个个处理和发送。
+- 队列会记录请求来自 QQ 群还是机器人好友私聊，处理完成后发送回原位置。
 - 上传成功后可自动清理图片目录和 PDF，减少磁盘占用。
 
 ## 本地安装
@@ -76,6 +78,7 @@ JM_BOT_SUPERUSERS=123456789
 JM_BOT_DOWNLOAD_ROOT=data/downloads
 JM_BOT_OUTPUT_ROOT=data/output
 JM_BOT_OPTION_ROOT=data/options
+JM_BOT_QUEUE_DB=data/queue.sqlite3
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 JM_BOT_GROUP_FOLDER=JM
 ```
@@ -89,7 +92,7 @@ JM_BOT_JMCOMIC_LOG=true
 JM_BOT_JMCOMIC_RETRY_TIMES=5
 ```
 
-`JM_BOT_MAX_CONCURRENCY` 控制机器人同时处理几个 JM 任务。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。小内存服务器优先降低这些值。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。小内存服务器优先降低这些值。
 
 ## 服务器部署
 
@@ -119,6 +122,27 @@ git switch main
 git pull origin main
 ./.venv/bin/pip install -r requirements.txt
 sudo systemctl restart jmbot
+```
+
+服务器不能访问 GitHub 时，可以在本地下载或打包 release 压缩包后上传：
+
+```bash
+# 本地机器
+scp JMbot-aliyun2c2g-v2.0.1.tar.gz root@你的服务器IP:/tmp/
+
+# 服务器
+sudo systemctl stop jmbot
+sudo mkdir -p /opt/jmbot
+sudo tar -xzf /tmp/JMbot-aliyun2c2g-v2.0.1.tar.gz -C /opt/jmbot --strip-components=1
+cd /opt/jmbot
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+sudo cp deploy/env.example /etc/jmbot.env
+sudo nano /etc/jmbot.env
+sudo cp deploy/jmbot.service.example /etc/systemd/system/jmbot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now jmbot
+sudo journalctl -u jmbot -f
 ```
 
 ## 阿里云 2C2G 优化版
@@ -159,8 +183,10 @@ JM_BOT_CLEAN_AFTER_UPLOAD=true
 - `data/downloads/`
 - `data/options/`
 - `data/output/`
+- `data/*.sqlite3`
 
 `data/options/` 中的 jmcomic 配置会按漫画 ID 自动生成，不需要手动维护。
+`data/queue.sqlite3` 保存未完成队列；如果你想清空队列，请先停止服务后再删除该文件。
 
 ## 注意事项
 

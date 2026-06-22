@@ -20,6 +20,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_DOWNLOAD_ROOT": "downloads",
                 "JM_BOT_OUTPUT_ROOT": "output",
                 "JM_BOT_OPTION_ROOT": "options",
+                "JM_BOT_QUEUE_DB": "queue/jobs.sqlite3",
                 "JM_BOT_MAX_CONCURRENCY": "3",
                 "JM_BOT_DOWNLOAD_IMAGE_THREADS": "3",
                 "JM_BOT_DOWNLOAD_PHOTO_THREADS": "1",
@@ -37,6 +38,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.download_root, Path("downloads"))
         self.assertEqual(config.output_root, Path("output"))
         self.assertEqual(config.option_root, Path("options"))
+        self.assertEqual(config.queue_db_path, Path("queue/jobs.sqlite3"))
         self.assertEqual(config.max_concurrency, 3)
         self.assertEqual(config.download_image_threads, 3)
         self.assertEqual(config.download_photo_threads, 1)
@@ -52,6 +54,9 @@ class ConfigTest(unittest.TestCase):
 
     def test_load_config_uses_jm_group_folder_by_default(self):
         self.assertEqual(load_config({}).group_folder_name, "JM")
+
+    def test_load_config_uses_queue_db_default(self):
+        self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [
