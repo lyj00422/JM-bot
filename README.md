@@ -136,7 +136,7 @@ sudo nano /etc/jmbot.env
 sudo systemctl restart jmbot
 ```
 
-低配推荐值：
+本分支的 `deploy/env.example` 已经使用低配推荐值：
 
 ```text
 JM_BOT_MAX_CONCURRENCY=1
@@ -147,7 +147,7 @@ JM_BOT_JMCOMIC_RETRY_TIMES=3
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
-这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。
+这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
 
 ## 运行时文件
 

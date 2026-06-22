@@ -11,6 +11,11 @@ ExecStart=/opt/jmbot/.venv/bin/python /opt/jmbot/main.py
 Restart=always
 RestartSec=5
 
+# Keep a small ECS instance responsive if a large album spikes memory.
+MemoryMax=1536M
+MemoryHigh=1280M
+CPUQuota=180%
+
 # Create a dedicated service user for production and replace this value.
 User=root
 
