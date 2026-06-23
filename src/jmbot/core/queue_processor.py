@@ -12,6 +12,7 @@ GroupUploader = Callable[[int, Path], Awaitable[None]]
 PrivateUploader = Callable[[int, Path], Awaitable[None]]
 Notifier = Callable[[AlbumQueueJob, str], Awaitable[None]]
 Cleaner = Callable[[Path, Path], Awaitable[None]]
+CancelChecker = Callable[[int], bool]
 
 
 async def process_next_album_job(
@@ -22,6 +23,7 @@ async def process_next_album_job(
     upload_private: PrivateUploader,
     notify: Notifier,
     cleanup: Cleaner | None = None,
+    is_canceled: CancelChecker | None = None,
 ) -> bool:
     """Process one queued album job and return whether a job was claimed."""
 
@@ -32,6 +34,12 @@ async def process_next_album_job(
     try:
         await _notify_safely(notify, job, f"开始处理 JM{job.album_id}。")
         result = await run_job(job.album_id)
+        if is_canceled is not None and is_canceled(job.id):
+            if cleanup is not None:
+                await cleanup(result.album_dir, result.pdf_path)
+            await _notify_safely(notify, job, f"JM{job.album_id} 已取消，不再上传。")
+            return True
+
         if job.destination_type == "group":
             if job.group_id is None:
                 raise ValueError(f"Group job {job.id} is missing group_id")
@@ -44,6 +52,10 @@ async def process_next_album_job(
 
         queue.mark_done(job.id)
     except Exception as exc:
+        if is_canceled is not None and is_canceled(job.id):
+            await _notify_safely(notify, job, f"JM{job.album_id} 已取消，不再上传。")
+            return True
+
         queue.mark_failed(job.id, str(exc))
         await _notify_safely(notify, job, f"JM{job.album_id} 处理失败：{exc}")
     else:

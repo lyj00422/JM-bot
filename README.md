@@ -18,13 +18,45 @@ git pull origin release/aliyun-2c2g
 ## 功能
 
 - 支持 `/jm <数字ID>` 命令。
+- 支持 `/jm 撤回 <数字ID>` 撤回自己还在排队中的任务。
+- 支持 `/jm 队列` 查看当前待处理和正在处理的任务。
+- 支持超级管理员命令：`/jm 管理 清空`、`/jm 管理 kill <数字ID>`、`/jm 管理 kill 全部 <数字ID>`、`/jm 管理 插队 <数字ID>`。
 - 支持 QQ 群和机器人好友私聊。
 - 每个漫画 ID 使用独立下载目录：`data/downloads/<id>`。
 - 生成 PDF 到：`data/output/JM<id>.pdf`。
 - 使用 SQLite 持久化漫画处理队列，收到请求后会提示“前面还有 xx 篇漫画正在处理”。
-- 重启后会优先恢复队列中未完成的漫画请求，并按收到时间一个个处理和发送。
+- 同一个群或同一个私聊用户里，同一个漫画 ID 不能重复排队；不同群、群和私聊之间可以分别排队。
+- 如果处理前发现 `data/output/JM<id>.pdf` 已存在，会直接上传这个 PDF，上传成功后按清理配置删除。
+- 重启后会优先恢复队列中未完成的漫画请求，删除上次未完成的图片下载目录，并重新开始处理。
 - 队列会记录请求来自 QQ 群还是机器人好友私聊，处理完成后发送回原位置。
 - 上传成功后可自动清理图片目录和 PDF，减少磁盘占用。
+
+## QQ 命令
+
+普通用户命令：
+
+```text
+/jm 123456
+/jm 撤回 123456
+/jm 队列
+```
+
+管理员命令需要发送者 QQ 在 `JM_BOT_SUPERUSERS` 中：
+
+```text
+/jm 管理 清空
+/jm 管理 kill 123456
+/jm 管理 kill 全部 123456
+/jm 管理 插队 123456
+```
+
+说明：
+
+- `/jm 撤回 <id>` 只能撤回自己在当前群或当前私聊里提交、且仍处于排队中的任务；已经开始处理的任务需要管理员 `kill`。
+- `/jm 管理 清空` 只清空待排队任务，不影响正在处理的任务。
+- `/jm 管理 kill <id>` 只取消当前群或当前私聊里的对应任务。
+- `/jm 管理 kill 全部 <id>` 会取消所有群和私聊里的对应任务。
+- `/jm 管理 插队 <id>` 会把当前群或当前私聊里的任务放到队首；如果还没有这个任务，会先创建再插队。
 
 ## 本地安装
 
@@ -122,6 +154,18 @@ git switch main
 git pull origin main
 ./.venv/bin/pip install -r requirements.txt
 sudo systemctl restart jmbot
+```
+
+更新阿里云 2C2G 分支：
+
+```bash
+cd /opt/jmbot
+git fetch origin
+git switch release/aliyun-2c2g
+git pull origin release/aliyun-2c2g
+./.venv/bin/pip install -r requirements.txt
+sudo systemctl restart jmbot
+sudo journalctl -u jmbot -f
 ```
 
 服务器不能访问 GitHub 时，可以在本地下载或打包 release 压缩包后上传：
