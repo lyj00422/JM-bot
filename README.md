@@ -179,6 +179,21 @@ sudo journalctl -u jmbot -f
 
 迁移后，`/opt/jmbot` 里会有 `.git`，以后就可以直接 `git pull` 更新。`data/` 是运行时目录，已在 `.gitignore` 中，不会被 `git pull` 覆盖。
 
+如果 NapCat 运行在 Docker 里，并且容器挂载了 `/opt/jmbot:/opt/jmbot`，迁移或替换 `/opt/jmbot` 目录后必须重建或重新创建 NapCat 容器。否则 JMbot 会在新的 `/opt/jmbot/data/output` 生成 PDF，但 NapCat 容器仍可能看到旧目录，上传时会报：
+
+```text
+ENOENT: no such file or directory, open '/opt/jmbot/data/output/JMxxxxxx.pdf'
+```
+
+可以先检查宿主机和容器看到的文件是否一致：
+
+```bash
+ls -lh /opt/jmbot/data/output/
+docker exec napcat ls -lh /opt/jmbot/data/output/
+```
+
+如果宿主机有文件、容器里没有，重建 NapCat 容器，并保持挂载 `/opt/jmbot:/opt/jmbot`。
+
 ### 服务器更新规则
 
 以后更新服务器前先判断 `/opt/jmbot` 是哪种部署方式：
