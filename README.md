@@ -179,6 +179,34 @@ sudo journalctl -u jmbot -f
 
 迁移后，`/opt/jmbot` 里会有 `.git`，以后就可以直接 `git pull` 更新。`data/` 是运行时目录，已在 `.gitignore` 中，不会被 `git pull` 覆盖。
 
+### 服务器更新规则
+
+以后更新服务器前先判断 `/opt/jmbot` 是哪种部署方式：
+
+```bash
+cd /opt/jmbot
+test -d .git && echo "git 部署，可以 git pull 更新" || echo "非 git 部署，需要先迁移或使用压缩包"
+```
+
+推荐长期使用 git 部署：
+
+- 通用服务器使用 `main` 分支。
+- 阿里云 2C2G 小机器使用 `release/aliyun-2c2g` 分支。
+- `/etc/jmbot.env` 是服务器本机配置，不在仓库里，`git pull` 不会覆盖它。
+- `data/` 里的队列数据库、下载目录和输出目录是运行时数据，已被 `.gitignore` 忽略，正常 `git pull` 不会覆盖它们。
+- 更新前先 `sudo systemctl stop jmbot`，更新后再 `sudo systemctl start jmbot`，最后用 `journalctl` 看日志。
+
+每次更新后建议确认：
+
+```bash
+cd /opt/jmbot
+git status
+git branch --show-current
+git rev-parse --short HEAD
+grep '^JM_BOT_SUPERUSERS' /etc/jmbot.env
+sudo systemctl status jmbot --no-pager
+```
+
 更新通用版：
 
 ```bash
