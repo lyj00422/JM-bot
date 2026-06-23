@@ -7,6 +7,14 @@
 - `main`：通用 release 版，适合本地开发、普通服务器部署，也作为功能开发的基线。
 - `release/aliyun-2c2g`：阿里云 2 vCPU / 2 GiB / 40 GiB ESSD 优化版，默认降低下载线程和并发，适合小配置服务器直接拉取部署。
 
+GitHub Release 规则：
+
+- 每个正式版本号同时发布两个压缩包。
+- `JMbot-vX.Y.Z.tar.gz` 是通用版，对应 `main` 分支。
+- `JMbot-aliyun2c2g-vX.Y.Z.tar.gz` 是阿里云 2C2G 优化版，对应 `release/aliyun-2c2g` 分支。
+- 如果服务器能访问 GitHub，优先使用对应分支 `git pull` 更新。
+- 如果服务器不能访问 GitHub，下载对应 release 压缩包后上传到服务器部署。
+
 服务器要部署低配优化版时使用：
 
 ```bash
@@ -146,27 +154,66 @@ sudo systemctl enable --now jmbot
 sudo journalctl -u jmbot -f
 ```
 
+如果 `/opt/jmbot` 是以前用压缩包解压出来的目录，它不是 git 仓库，执行 `git pull` 会报：
+
+```text
+fatal: not a git repository
+```
+
+这种情况下可以迁移成 git 部署，并保留运行数据：
+
+```bash
+sudo systemctl stop jmbot
+
+cd /opt
+sudo mv /opt/jmbot /opt/jmbot.bak-$(date +%F-%H%M%S)
+sudo git clone -b release/aliyun-2c2g https://github.com/lyj00422/JM-bot.git /opt/jmbot
+sudo cp -a /opt/jmbot.bak-*/data /opt/jmbot/data
+
+cd /opt/jmbot
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+sudo systemctl start jmbot
+sudo journalctl -u jmbot -f
+```
+
+迁移后，`/opt/jmbot` 里会有 `.git`，以后就可以直接 `git pull` 更新。`data/` 是运行时目录，已在 `.gitignore` 中，不会被 `git pull` 覆盖。
+
 更新通用版：
 
 ```bash
 cd /opt/jmbot
+sudo systemctl stop jmbot
+git fetch origin --tags
 git switch main
-git pull origin main
+git pull --ff-only origin main
 ./.venv/bin/pip install -r requirements.txt
-sudo systemctl restart jmbot
+sudo systemctl start jmbot
+sudo journalctl -u jmbot -f
 ```
 
 更新阿里云 2C2G 分支：
 
 ```bash
 cd /opt/jmbot
-git fetch origin
+sudo systemctl stop jmbot
+git fetch origin --tags
 git switch release/aliyun-2c2g
-git pull origin release/aliyun-2c2g
+git pull --ff-only origin release/aliyun-2c2g
 ./.venv/bin/pip install -r requirements.txt
-sudo systemctl restart jmbot
+sudo systemctl start jmbot
 sudo journalctl -u jmbot -f
 ```
+
+如果从 Windows 复制环境变量文件到 Linux，看到 `^M`，说明文件是 CRLF 换行。建议清理一次：
+
+```bash
+sudo sed -i 's/\r$//' /etc/jmbot.env
+cat -v /etc/jmbot.env
+sudo systemctl restart jmbot
+```
+
+`cat -v` 不再显示 `^M` 就表示换行已经正常。
 
 服务器不能访问 GitHub 时，可以在本地下载或打包 release 压缩包后上传：
 
