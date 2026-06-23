@@ -72,7 +72,7 @@ class SenderTest(unittest.IsolatedAsyncioTestCase):
                 "upload_group_file",
                 {
                     "group_id": 1053512745,
-                    "file": str(pdf_path.resolve()),
+                    "file": pdf_path.resolve().as_uri(),
                     "name": "JM1949101.pdf",
                     "folder": "abc",
                 },
@@ -93,7 +93,7 @@ class SenderTest(unittest.IsolatedAsyncioTestCase):
                 "upload_private_file",
                 {
                     "user_id": 2661195769,
-                    "file": str(pdf_path.resolve()),
+                    "file": pdf_path.resolve().as_uri(),
                     "name": "JM1949101.pdf",
                 },
             ),
