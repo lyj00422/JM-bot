@@ -140,6 +140,93 @@ class PersistentAlbumQueueTest(unittest.TestCase):
         self.assertEqual(moved.id, second.id)
         self.assertEqual(claimed.id, second.id)
 
+    def test_lists_active_jobs_for_current_user_context_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            own_group = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            queue.enqueue_group("222222", group_id=10001, user_id=99)
+            queue.enqueue_group("333333", group_id=10002, user_id=42)
+            queue.enqueue_private("444444", user_id=42)
+
+            jobs = queue.list_active_for_user(
+                destination_type="group",
+                group_id=10001,
+                user_id=42,
+            )
+
+        self.assertEqual([job.id for job in jobs], [own_group.id])
+
+    def test_lists_history_for_current_user_context_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            own_done = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            own_failed = queue.enqueue_group("222222", group_id=10001, user_id=42)
+            other_user = queue.enqueue_group("333333", group_id=10001, user_id=99)
+            other_group = queue.enqueue_group("444444", group_id=10002, user_id=42)
+            active = queue.enqueue_group("555555", group_id=10001, user_id=42)
+
+            queue.mark_done(own_done.id)
+            queue.mark_failed(own_failed.id, "network failed")
+            queue.mark_done(other_user.id)
+            queue.mark_failed(other_group.id, "other group failed")
+
+            jobs = queue.list_history_for_user(
+                destination_type="group",
+                group_id=10001,
+                user_id=42,
+            )
+            failed_jobs = queue.list_history_for_user(
+                destination_type="group",
+                group_id=10001,
+                user_id=42,
+                failed_only=True,
+            )
+
+        self.assertEqual([job.id for job in jobs], [own_failed.id, own_done.id])
+        self.assertEqual([job.id for job in failed_jobs], [own_failed.id])
+        self.assertNotIn(active.id, [job.id for job in jobs])
+
+    def test_finds_latest_failed_job_for_current_user_context_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            other_user = queue.enqueue_group("111111", group_id=10001, user_id=99)
+            queue.mark_failed(other_user.id, "other user failed")
+            own_failed = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            other_group = queue.enqueue_group("111111", group_id=10002, user_id=42)
+
+            queue.mark_failed(own_failed.id, "own failed")
+            queue.mark_failed(other_group.id, "other group failed")
+
+            found = queue.find_latest_failed_for_user(
+                "111111",
+                destination_type="group",
+                group_id=10001,
+                user_id=42,
+            )
+            missing = queue.find_latest_failed_for_user(
+                "111111",
+                destination_type="private",
+                group_id=None,
+                user_id=42,
+            )
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, own_failed.id)
+        self.assertIsNone(missing)
+
+    def test_lists_recent_failed_jobs_globally_for_admin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            failed = queue.enqueue_private("111111", user_id=42)
+            done = queue.enqueue_private("222222", user_id=43)
+
+            queue.mark_failed(failed.id, "network failed")
+            queue.mark_done(done.id)
+
+            jobs = queue.list_failed_jobs(limit=5)
+
+        self.assertEqual([job.id for job in jobs], [failed.id])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,6 +56,37 @@ class ParseJmCommandTest(unittest.TestCase):
         self.assertEqual(result.action, "help")
         self.assertIsNone(result.album_id)
 
+    def test_parse_my_tasks_commands(self):
+        for message in ["/jm 我的", "/jm my"]:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "my_tasks")
+                self.assertIsNone(result.album_id)
+
+    def test_parse_history_commands(self):
+        cases = [
+            ("/jm 历史", False),
+            ("/jm history", False),
+            ("/jm 历史 失败", True),
+        ]
+
+        for message, failed_only in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "history")
+                self.assertEqual(result.failed_only, failed_only)
+
+    def test_parse_retry_command(self):
+        result = parse_jm_message("/jm 重试 123456")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "retry")
+        self.assertEqual(result.album_id, "123456")
+
     def test_parse_admin_commands(self):
         cases = [
             ("/jm 管理 清空", "admin_clear", None, False),
@@ -72,6 +103,12 @@ class ParseJmCommandTest(unittest.TestCase):
                 self.assertEqual(result.action, action)
                 self.assertEqual(result.album_id, album_id)
                 self.assertEqual(result.all_targets, all_targets)
+
+    def test_parse_admin_failed_command(self):
+        result = parse_jm_message("/jm 管理 失败")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "admin_failed")
 
 
 if __name__ == "__main__":

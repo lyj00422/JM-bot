@@ -12,7 +12,19 @@ class JmCommand:
     album_id: str
 
 
-JmAction = Literal["request", "cancel", "queue", "help", "admin_clear", "admin_kill", "admin_jump"]
+JmAction = Literal[
+    "request",
+    "cancel",
+    "queue",
+    "help",
+    "my_tasks",
+    "history",
+    "retry",
+    "admin_clear",
+    "admin_kill",
+    "admin_jump",
+    "admin_failed",
+]
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,7 @@ class JmMessage:
     action: JmAction
     album_id: str | None = None
     all_targets: bool = False
+    failed_only: bool = False
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -60,7 +73,23 @@ def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | N
     if re.match(rf"^\s*{prefix}\s+(帮助|help)\s*$", message, re.IGNORECASE):
         return JmMessage(action="help")
 
+    if re.match(rf"^\s*{prefix}\s+(我的|my)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="my_tasks")
+
+    if re.match(rf"^\s*{prefix}\s+(历史|history)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="history")
+
+    if re.match(rf"^\s*{prefix}\s+历史\s+失败\s*$", message, re.IGNORECASE):
+        return JmMessage(action="history", failed_only=True)
+
+    retry_match = re.match(rf"^\s*{prefix}\s+重试\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if retry_match is not None:
+        return JmMessage(action="retry", album_id=retry_match.group(1))
+
     if re.match(rf"^\s*{prefix}\s+管理\s+清空\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_clear")
+
+    if re.match(rf"^\s*{prefix}\s+管理\s+失败\s*$", message, re.IGNORECASE):
+        return JmMessage(action="admin_failed")
 
     return None

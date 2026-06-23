@@ -155,6 +155,91 @@ class PersistentAlbumQueue:
             rows = connection.execute(query, params).fetchall()
         return [_row_to_job(row) for row in rows]
 
+    def list_active_for_user(
+        self,
+        *,
+        destination_type: DestinationType,
+        group_id: int | None,
+        user_id: int,
+    ) -> list[AlbumQueueJob]:
+        with self._connection() as connection:
+            where, params = self._context_filter(destination_type, group_id, user_id)
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM album_queue
+                WHERE {where}
+                  AND status IN ('pending', 'processing')
+                ORDER BY priority DESC, id
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def list_history_for_user(
+        self,
+        *,
+        destination_type: DestinationType,
+        group_id: int | None,
+        user_id: int,
+        failed_only: bool = False,
+        limit: int = 10,
+    ) -> list[AlbumQueueJob]:
+        statuses = ("failed",) if failed_only else ("done", "failed", "canceled")
+        placeholders = ", ".join("?" for _ in statuses)
+        with self._connection() as connection:
+            where, params = self._context_filter(destination_type, group_id, user_id)
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM album_queue
+                WHERE {where}
+                  AND status IN ({placeholders})
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple([*params, *statuses, limit]),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def find_latest_failed_for_user(
+        self,
+        album_id: str,
+        *,
+        destination_type: DestinationType,
+        group_id: int | None,
+        user_id: int,
+    ) -> AlbumQueueJob | None:
+        with self._connection() as connection:
+            where, params = self._context_filter(destination_type, group_id, user_id)
+            row = connection.execute(
+                f"""
+                SELECT *
+                FROM album_queue
+                WHERE {where}
+                  AND album_id = ?
+                  AND status = 'failed'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                tuple([*params, album_id]),
+            ).fetchone()
+        return None if row is None else _row_to_job(row)
+
+    def list_failed_jobs(self, *, limit: int = 10) -> list[AlbumQueueJob]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM album_queue
+                WHERE status = 'failed'
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
     def cancel_pending_for_user(
         self,
         album_id: str,
@@ -394,6 +479,25 @@ class PersistentAlbumQueue:
             """,
             tuple(params),
         ).fetchone()
+
+    def _context_filter(
+        self,
+        destination_type: DestinationType,
+        group_id: int | None,
+        user_id: int,
+    ) -> tuple[str, list[str | int]]:
+        where = ["destination_type = ?", "user_id = ?"]
+        params: list[str | int] = [destination_type, user_id]
+        if destination_type == "group":
+            if group_id is None:
+                raise ValueError("group_id is required for group jobs")
+            where.append("group_id = ?")
+            params.append(group_id)
+        elif destination_type == "private":
+            where.append("group_id IS NULL")
+        else:
+            raise ValueError(f"Unsupported destination_type: {destination_type}")
+        return " AND ".join(where), params
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
