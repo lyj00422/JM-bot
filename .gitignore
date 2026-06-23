@@ -8,6 +8,11 @@ scripts/local.env
 *.pyo
 *.log
 
+# Codex / Superpowers local planning artifacts
+docs/superpowers/
+.superpowers/
+.codex/
+
 logs/
 data/downloads/
 data/options/
