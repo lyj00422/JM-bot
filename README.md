@@ -47,7 +47,10 @@ git pull origin release/aliyun-2c2g
 /jm 123456
 /jm 撤回 123456
 /jm 队列
+/jm 帮助
 ```
+
+`/jm help` 是 `/jm 帮助` 的英文别名。
 
 管理员命令需要发送者 QQ 在 `JM_BOT_SUPERUSERS` 中：
 
