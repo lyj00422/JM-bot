@@ -45,6 +45,39 @@ def build_pdf(image_root: str | Path, out_pdf: str | Path) -> Path:
     output = Path(out_pdf)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    return _build_pdf_from_images(images, output)
+
+
+def build_split_pdfs(
+    image_root: str | Path,
+    output_dir: str | Path,
+    base_name: str,
+    *,
+    images_per_part: int,
+) -> tuple[Path, ...]:
+    """Build multiple numbered PDF parts from images under a root directory."""
+
+    if images_per_part < 1:
+        raise ValueError("images_per_part must be at least 1")
+
+    images = collect_images(image_root)
+    if not images:
+        raise ValueError(f"No images found under {Path(image_root)}")
+
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    parts: list[Path] = []
+    for part_index, start in enumerate(range(0, len(images), images_per_part), start=1):
+        chunk = images[start : start + images_per_part]
+        output = output_root / f"{base_name}.part{part_index}.pdf"
+        parts.append(_build_pdf_from_images(chunk, output))
+    return tuple(parts)
+
+
+def _build_pdf_from_images(images: list[Path], output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+
     if _build_pdf_with_img2pdf(images, output):
         return output
 

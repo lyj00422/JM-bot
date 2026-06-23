@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
 import jmcomic
 
-from jmbot.core.pdf_builder import build_pdf, collect_images
+from jmbot.core.pdf_builder import build_pdf, build_split_pdfs, collect_images
 
 
 class CreateOption(Protocol):
@@ -31,6 +32,8 @@ class DownloadSettings:
     download_photo_threads: int = 2
     jmcomic_log: bool = True
     jmcomic_retry_times: int = 5
+    auto_split_pdf: bool = False
+    split_image_count: int = 80
 
 
 @dataclass(frozen=True)
@@ -44,11 +47,18 @@ class DownloadResult:
 
 @dataclass(frozen=True)
 class AlbumJobResult:
-    """Complete album job result, including the generated PDF path."""
+    """Complete album job result, including generated PDF path(s)."""
 
     album_id: str
     album_dir: Path
     pdf_path: Path
+    pdf_paths: tuple[Path, ...] = ()
+
+    @property
+    def output_paths(self) -> tuple[Path, ...]:
+        """Return every PDF that should be uploaded for this job."""
+
+        return self.pdf_paths or (self.pdf_path,)
 
 
 def download_comic(
@@ -90,6 +100,29 @@ def create_pdf_for_album(
     return pdf_builder(album_dir, output_dir / f"JM{album_id}.pdf")
 
 
+def create_pdfs_for_album(
+    album_id: str,
+    album_dir: str | Path,
+    output_root: str | Path,
+    settings: DownloadSettings,
+) -> tuple[Path, ...]:
+    """Convert a downloaded album into one PDF or numbered PDF parts."""
+
+    images = collect_images(album_dir)
+    if not images:
+        raise ValueError(f"No images found under {Path(album_dir)}")
+
+    if settings.auto_split_pdf and len(images) > settings.split_image_count:
+        return build_split_pdfs(
+            album_dir,
+            output_root,
+            f"JM{album_id}",
+            images_per_part=settings.split_image_count,
+        )
+
+    return (create_pdf_for_album(album_id, album_dir, output_root),)
+
+
 def run_album_job(
     album_id: str,
     download_settings: DownloadSettings,
@@ -100,7 +133,17 @@ def run_album_job(
 ) -> AlbumJobResult:
     """Run the full album flow: download images, create PDF, return paths."""
 
-    cached_pdf = Path(output_root) / f"JM{album_id}.pdf"
+    output_dir = Path(output_root)
+    cached_parts = _cached_split_pdfs(output_dir, album_id) if download_settings.auto_split_pdf else ()
+    if cached_parts:
+        return AlbumJobResult(
+            album_id=album_id,
+            album_dir=download_settings.download_root / album_id,
+            pdf_path=cached_parts[0],
+            pdf_paths=cached_parts,
+        )
+
+    cached_pdf = output_dir / f"JM{album_id}.pdf"
     if cached_pdf.exists() and cached_pdf.is_file():
         return AlbumJobResult(album_id=album_id, album_dir=download_settings.download_root / album_id, pdf_path=cached_pdf)
 
@@ -110,8 +153,24 @@ def run_album_job(
         create_option=create_option,
         download_album=download_album,
     )
-    pdf_path = create_pdf_for_album(album_id, download_result.album_dir, output_root)
-    return AlbumJobResult(album_id=album_id, album_dir=download_result.album_dir, pdf_path=pdf_path)
+    pdf_paths = create_pdfs_for_album(album_id, download_result.album_dir, output_root, download_settings)
+    return AlbumJobResult(
+        album_id=album_id,
+        album_dir=download_result.album_dir,
+        pdf_path=pdf_paths[0],
+        pdf_paths=pdf_paths,
+    )
+
+
+def _cached_split_pdfs(output_root: Path, album_id: str) -> tuple[Path, ...]:
+    part_pattern = re.compile(rf"^JM{re.escape(album_id)}\.part(\d+)\.pdf$")
+    indexed_parts: list[tuple[int, Path]] = []
+    for path in output_root.glob(f"JM{album_id}.part*.pdf"):
+        match = part_pattern.match(path.name)
+        if match is not None and path.is_file():
+            indexed_parts.append((int(match.group(1)), path))
+
+    return tuple(path for _, path in sorted(indexed_parts))
 
 
 def _write_option_file(option_path: Path, album_dir: Path, settings: DownloadSettings) -> None:

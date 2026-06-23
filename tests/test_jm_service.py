@@ -90,6 +90,59 @@ class JmServiceTest(unittest.TestCase):
         self.assertEqual(result.album_dir, root / "downloads" / "123456")
         self.assertEqual(result.pdf_path, cached_pdf)
 
+    def test_run_album_job_uses_existing_split_pdfs_without_downloading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            part1 = output_dir / "JM123456.part1.pdf"
+            part2 = output_dir / "JM123456.part2.pdf"
+            part1.write_bytes(b"pdf1")
+            part2.write_bytes(b"pdf2")
+
+            def fake_create_option(option_path):
+                raise AssertionError("create_option should not run when split PDFs exist")
+
+            def fake_downloader(album_id, option):
+                raise AssertionError("download_album should not run when split PDFs exist")
+
+            result = run_album_job(
+                "123456",
+                DownloadSettings(download_root=root / "downloads", option_root=root / "options", auto_split_pdf=True),
+                output_dir,
+                create_option=fake_create_option,
+                download_album=fake_downloader,
+            )
+
+        self.assertEqual(result.album_id, "123456")
+        self.assertEqual(result.pdf_path, part1)
+        self.assertEqual(result.output_paths, (part1, part2))
+
+    def test_run_album_job_splits_large_album_into_part_pdfs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def fake_downloader(album_id, option):
+                album_dir = root / "downloads" / album_id
+                album_dir.mkdir(parents=True, exist_ok=True)
+                for index in range(1, 6):
+                    Image.new("RGB", (8, 8), (index, 0, 0)).save(album_dir / f"{index:03d}.jpg")
+
+            result = run_album_job(
+                "123456",
+                DownloadSettings(
+                    download_root=root / "downloads",
+                    option_root=root / "options",
+                    auto_split_pdf=True,
+                    split_image_count=2,
+                ),
+                root / "output",
+                create_option=lambda option_path: object(),
+                download_album=fake_downloader,
+            )
+
+        self.assertEqual([path.name for path in result.output_paths], ["JM123456.part1.pdf", "JM123456.part2.pdf", "JM123456.part3.pdf"])
+
 
 if __name__ == "__main__":
     unittest.main()

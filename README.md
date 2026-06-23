@@ -146,9 +146,11 @@ JM_BOT_DOWNLOAD_PHOTO_THREADS=2
 JM_BOT_JMCOMIC_LOG=true
 JM_BOT_JMCOMIC_RETRY_TIMES=5
 JM_BOT_JOB_TIMEOUT_SECONDS=1800
+JM_BOT_AUTO_SPLIT_PDF=true
+JM_BOT_SPLIT_IMAGE_COUNT=80
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。小内存服务器优先降低线程数，并保留任务超时保护。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成 `JM<id>.part1.pdf`、`JM<id>.part2.pdf` 等多个 PDF 并顺序上传，不在低配服务器上默认合并成单个大 PDF。小内存服务器优先降低线程数，并保留任务超时保护。
 
 ## 服务器部署
 
@@ -278,17 +280,17 @@ sudo systemctl restart jmbot
 
 ```bash
 # 本地机器
-PACKAGE=JMbot-v0.2.4.tar.gz
+PACKAGE=JMbot-v0.2.5.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.2.4.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.2.5.tar.gz
 scp "$PACKAGE" root@你的服务器IP:/tmp/
 
 # 服务器
 sudo systemctl stop jmbot
 sudo mkdir -p /opt/jmbot
-PACKAGE=JMbot-v0.2.4.tar.gz
+PACKAGE=JMbot-v0.2.5.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.2.4.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.2.5.tar.gz
 sudo tar -xzf "/tmp/$PACKAGE" -C /opt/jmbot --strip-components=1
 cd /opt/jmbot
 python3 -m venv .venv
@@ -325,10 +327,12 @@ JM_BOT_DOWNLOAD_PHOTO_THREADS=1
 JM_BOT_JMCOMIC_LOG=false
 JM_BOT_JMCOMIC_RETRY_TIMES=3
 JM_BOT_JOB_TIMEOUT_SECONDS=1800
+JM_BOT_AUTO_SPLIT_PDF=true
+JM_BOT_SPLIT_IMAGE_COUNT=80
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
-这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。PDF 生成会优先使用 `img2pdf` 以减少整本图片一次性解码带来的内存压力；如果转换失败，会回退到 Pillow。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
+这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。PDF 生成会优先使用 `img2pdf` 以减少整本图片一次性解码带来的内存压力；当图片数量超过 `JM_BOT_SPLIT_IMAGE_COUNT` 时，会生成多个分卷 PDF 并依次上传，避免 2 GiB 服务器为了单个超大 PDF 承受过高内存和磁盘 I/O 压力。如果转换失败，会回退到 Pillow。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
 
 ## 运行时文件
 
