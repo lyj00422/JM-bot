@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from jmbot.core.pdf_builder import build_pdf, collect_images
+from jmbot.core.pdf_builder import build_pdf, build_split_pdfs, collect_images
 
 
 def make_image(path: Path, color: tuple[int, int, int]) -> None:
@@ -59,6 +59,28 @@ class PdfBuilderTest(unittest.TestCase):
 
             self.assertEqual(pdf_path.read_bytes(), b"%PDF-1.4\n% fake\n")
             self.assertEqual(calls, [[str(root / "001.jpg"), str(root / "002.png")]])
+        finally:
+            self._remove_tree(root)
+
+    def test_build_split_pdfs_creates_numbered_parts(self):
+        root = Path(self._testMethodName)
+        calls = []
+
+        def convert(paths):
+            calls.append(paths)
+            return f"%PDF-1.4\n% part {len(calls)}\n".encode()
+
+        try:
+            for index in range(1, 6):
+                make_image(root / f"{index:03d}.jpg", (index, 0, 0))
+
+            fake_img2pdf = types.SimpleNamespace(convert=convert)
+            with patch.dict(sys.modules, {"img2pdf": fake_img2pdf}):
+                parts = build_split_pdfs(root, root / "output", "JM123456", images_per_part=2)
+
+            self.assertEqual([part.name for part in parts], ["JM123456.part1.pdf", "JM123456.part2.pdf", "JM123456.part3.pdf"])
+            self.assertEqual([len(call) for call in calls], [2, 2, 1])
+            self.assertTrue(all(part.exists() for part in parts))
         finally:
             self._remove_tree(root)
 

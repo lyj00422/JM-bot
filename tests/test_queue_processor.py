@@ -51,6 +51,58 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(("upload_private", 42, pdf_path), calls)
         self.assertIn(("cleanup", Path(tmp) / "111111", pdf_path), calls)
 
+    async def test_processes_group_job_with_multiple_pdf_parts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            calls = []
+            part1 = Path(tmp) / "JM111111.part1.pdf"
+            part2 = Path(tmp) / "JM111111.part2.pdf"
+            part1.write_bytes(b"pdf1")
+            part2.write_bytes(b"pdf2")
+
+            async def run_job(album_id):
+                return AlbumJobResult(
+                    album_id=album_id,
+                    album_dir=Path(tmp) / album_id,
+                    pdf_path=part1,
+                    pdf_paths=(part1, part2),
+                )
+
+            async def upload_group(group_id, path):
+                calls.append(("upload_group", group_id, path))
+
+            async def upload_private(user_id, path):
+                calls.append(("upload_private", user_id, path))
+
+            async def notify(job, message):
+                calls.append(("notify", message))
+
+            async def cleanup(album_dir, path):
+                calls.append(("cleanup", album_dir, path))
+
+            processed = await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                cleanup=cleanup,
+            )
+
+            rows = queue.list_jobs()
+
+        self.assertTrue(processed)
+        self.assertEqual(rows[0].id, queued.id)
+        self.assertEqual(rows[0].status, "done")
+        self.assertIn(("upload_group", 10001, part1), calls)
+        self.assertIn(("upload_group", 10001, part2), calls)
+        self.assertNotIn(("upload_private", 42, part1), calls)
+        self.assertIn(("cleanup", Path(tmp) / "111111", part1), calls)
+        self.assertIn(("cleanup", Path(tmp) / "111111", part2), calls)
+        notify_messages = [call[1] for call in calls if call[0] == "notify"]
+        self.assertTrue(any("JM111111.part1.pdf" in message and "JM111111.part2.pdf" in message for message in notify_messages))
+
     async def test_processes_private_job_and_marks_failed_on_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

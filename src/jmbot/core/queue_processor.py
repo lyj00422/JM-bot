@@ -45,23 +45,29 @@ async def process_next_album_job(
     try:
         await _notify_safely(notify, job, format_task_started(job.album_id))
         result = await run_job(job.album_id)
-        LOGGER.info("Built JM%s PDF for queue job %s: %s", job.album_id, job.id, result.pdf_path)
+        output_paths = result.output_paths
+        output_names = ", ".join(path.name for path in output_paths)
+        LOGGER.info("Built JM%s PDF(s) for queue job %s: %s", job.album_id, job.id, output_names)
         if is_canceled is not None and is_canceled(job.id):
             if cleanup is not None:
-                await cleanup(result.album_dir, result.pdf_path)
+                for pdf_path in output_paths:
+                    await cleanup(result.album_dir, pdf_path)
             await _notify_safely(notify, job, format_task_canceled(job.album_id))
             return True
 
         if job.destination_type == "group":
             if job.group_id is None:
                 raise ValueError(f"Group job {job.id} is missing group_id")
-            await upload_group(job.group_id, result.pdf_path)
+            for pdf_path in output_paths:
+                await upload_group(job.group_id, pdf_path)
         else:
-            await upload_private(job.user_id, result.pdf_path)
-        LOGGER.info("Uploaded JM%s PDF for queue job %s", job.album_id, job.id)
+            for pdf_path in output_paths:
+                await upload_private(job.user_id, pdf_path)
+        LOGGER.info("Uploaded JM%s PDF(s) for queue job %s: %s", job.album_id, job.id, output_names)
 
         if cleanup is not None:
-            await cleanup(result.album_dir, result.pdf_path)
+            for pdf_path in output_paths:
+                await cleanup(result.album_dir, pdf_path)
 
         queue.mark_done(job.id)
     except Exception as exc:
@@ -74,7 +80,7 @@ async def process_next_album_job(
         await _notify_safely(notify, job, format_task_failed(job.album_id))
     else:
         LOGGER.info("Finished JM%s queue job %s in %.1f seconds", job.album_id, job.id, time.monotonic() - started)
-        await _notify_safely(notify, job, format_task_uploaded(job.album_id, result.pdf_path.name))
+        await _notify_safely(notify, job, format_task_uploaded(job.album_id, output_names))
 
     return True
 

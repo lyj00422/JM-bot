@@ -27,6 +27,8 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_JMCOMIC_LOG": "false",
                 "JM_BOT_JMCOMIC_RETRY_TIMES": "2",
                 "JM_BOT_JOB_TIMEOUT_SECONDS": "600",
+                "JM_BOT_AUTO_SPLIT_PDF": "false",
+                "JM_BOT_SPLIT_IMAGE_COUNT": "50",
                 "JM_BOT_ALLOWED_GROUPS": "10001,10002",
                 "JM_BOT_SUPERUSERS": "42",
                 "JM_BOT_CLEAN_AFTER_UPLOAD": "false",
@@ -46,6 +48,8 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config.jmcomic_log)
         self.assertEqual(config.jmcomic_retry_times, 2)
         self.assertEqual(config.job_timeout_seconds, 600)
+        self.assertFalse(config.auto_split_pdf)
+        self.assertEqual(config.split_image_count, 50)
         self.assertEqual(config.allowed_group_ids, {10001, 10002})
         self.assertEqual(config.superuser_ids, {42})
         self.assertFalse(config.clean_after_upload)
@@ -60,12 +64,19 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_uses_queue_db_default(self):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
 
+    def test_load_config_enables_auto_split_pdf_by_default_for_aliyun_branch(self):
+        config = load_config({})
+
+        self.assertTrue(config.auto_split_pdf)
+        self.assertEqual(config.split_image_count, 80)
+
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [
             {"JM_BOT_DOWNLOAD_IMAGE_THREADS": "0"},
             {"JM_BOT_DOWNLOAD_PHOTO_THREADS": "0"},
             {"JM_BOT_JMCOMIC_RETRY_TIMES": "0"},
             {"JM_BOT_JOB_TIMEOUT_SECONDS": "0"},
+            {"JM_BOT_SPLIT_IMAGE_COUNT": "0"},
         ]
 
         for env in invalid_cases:

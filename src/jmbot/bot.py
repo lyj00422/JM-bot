@@ -41,6 +41,8 @@ DOWNLOAD_SETTINGS = DownloadSettings(
     download_photo_threads=CONFIG.download_photo_threads,
     jmcomic_log=CONFIG.jmcomic_log,
     jmcomic_retry_times=CONFIG.jmcomic_retry_times,
+    auto_split_pdf=CONFIG.auto_split_pdf,
+    split_image_count=CONFIG.split_image_count,
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 _queue_worker_lock = asyncio.Lock()
