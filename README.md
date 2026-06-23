@@ -219,12 +219,18 @@ sudo systemctl restart jmbot
 
 ```bash
 # 本地机器
-scp JMbot-aliyun2c2g-v0.2.3.tar.gz root@你的服务器IP:/tmp/
+PACKAGE=JMbot-v0.2.3.tar.gz
+# 阿里云 2C2G 优化版使用：
+# PACKAGE=JMbot-aliyun2c2g-v0.2.3.tar.gz
+scp "$PACKAGE" root@你的服务器IP:/tmp/
 
 # 服务器
 sudo systemctl stop jmbot
 sudo mkdir -p /opt/jmbot
-sudo tar -xzf /tmp/JMbot-aliyun2c2g-v0.2.3.tar.gz -C /opt/jmbot --strip-components=1
+PACKAGE=JMbot-v0.2.3.tar.gz
+# 阿里云 2C2G 优化版使用：
+# PACKAGE=JMbot-aliyun2c2g-v0.2.3.tar.gz
+sudo tar -xzf "/tmp/$PACKAGE" -C /opt/jmbot --strip-components=1
 cd /opt/jmbot
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
