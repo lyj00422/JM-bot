@@ -3,6 +3,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from jmbot.core.formatter import (
+    format_task_canceled,
+    format_task_failed,
+    format_task_started,
+    format_task_uploaded,
+)
 from jmbot.core.jm_service import AlbumJobResult
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 
@@ -32,12 +38,12 @@ async def process_next_album_job(
         return False
 
     try:
-        await _notify_safely(notify, job, f"开始处理 JM{job.album_id}。")
+        await _notify_safely(notify, job, format_task_started(job.album_id))
         result = await run_job(job.album_id)
         if is_canceled is not None and is_canceled(job.id):
             if cleanup is not None:
                 await cleanup(result.album_dir, result.pdf_path)
-            await _notify_safely(notify, job, f"JM{job.album_id} 已取消，不再上传。")
+            await _notify_safely(notify, job, format_task_canceled(job.album_id))
             return True
 
         if job.destination_type == "group":
@@ -53,13 +59,13 @@ async def process_next_album_job(
         queue.mark_done(job.id)
     except Exception as exc:
         if is_canceled is not None and is_canceled(job.id):
-            await _notify_safely(notify, job, f"JM{job.album_id} 已取消，不再上传。")
+            await _notify_safely(notify, job, format_task_canceled(job.album_id))
             return True
 
         queue.mark_failed(job.id, str(exc))
-        await _notify_safely(notify, job, f"JM{job.album_id} 处理失败：{exc}")
+        await _notify_safely(notify, job, format_task_failed(job.album_id))
     else:
-        await _notify_safely(notify, job, f"JM{job.album_id} 已上传：{result.pdf_path.name}")
+        await _notify_safely(notify, job, format_task_uploaded(job.album_id, result.pdf_path.name))
 
     return True
 

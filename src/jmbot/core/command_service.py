@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jmbot.core.formatter import format_queue_summary
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 
 
@@ -47,16 +48,7 @@ def queue_summary(queue: PersistentAlbumQueue, *, limit: int = 10) -> str:
     """Return a compact active queue summary."""
 
     active_jobs = [job for job in queue.list_jobs() if job.status in {"pending", "processing"}]
-    if not active_jobs:
-        return "队列为空。"
-
-    lines = [f"当前队列共 {len(active_jobs)} 个任务："]
-    for job in active_jobs[:limit]:
-        target = f"群 {job.group_id}" if job.destination_type == "group" else f"私聊 {job.user_id}"
-        lines.append(f"#{job.id} JM{job.album_id} {job.status} {target}")
-    if len(active_jobs) > limit:
-        lines.append(f"还有 {len(active_jobs) - limit} 个未显示。")
-    return "\n".join(lines)
+    return format_queue_summary(active_jobs, limit=limit)
 
 
 def admin_clear_queue(queue: PersistentAlbumQueue) -> str:

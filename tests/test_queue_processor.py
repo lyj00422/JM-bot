@@ -84,6 +84,40 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_rows[0].error, "download failed for 222222")
         self.assertTrue(any("处理失败" in message for _, message in messages))
 
+    async def test_failure_notification_hides_raw_error_but_persists_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("555555", user_id=45)
+            messages = []
+
+            async def run_job(album_id):
+                raise RuntimeError("secret upstream failure")
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                raise AssertionError("private upload should not run")
+
+            async def notify(job, message):
+                messages.append(message)
+
+            processed = await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+            )
+
+            failed_rows = queue.list_jobs(status="failed")
+
+        self.assertTrue(processed)
+        self.assertEqual(failed_rows[0].id, queued.id)
+        self.assertEqual(failed_rows[0].error, "secret upstream failure")
+        self.assertTrue(any("JM555555 处理失败" in message for message in messages))
+        self.assertFalse(any("secret upstream failure" in message for message in messages))
+
     async def test_keeps_job_done_when_success_notification_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
