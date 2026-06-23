@@ -118,6 +118,44 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0].id, queued.id)
         self.assertEqual(rows[0].status, "done")
 
+    async def test_skips_upload_when_job_is_canceled_after_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("444444", user_id=44)
+            pdf_path = Path(tmp) / "JM444444.pdf"
+            pdf_path.write_bytes(b"pdf")
+            calls = []
+
+            async def run_job(album_id):
+                queue.admin_cancel_album(album_id, destination_type="private", user_id=44)
+                return AlbumJobResult(album_id=album_id, album_dir=Path(tmp) / album_id, pdf_path=pdf_path)
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                calls.append(("upload_private", user_id, path))
+
+            async def notify(job, message):
+                calls.append(("notify", message))
+
+            processed = await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                is_canceled=queue.is_canceled,
+            )
+
+            rows = queue.list_jobs()
+
+        self.assertTrue(processed)
+        self.assertEqual(rows[0].id, queued.id)
+        self.assertEqual(rows[0].status, "canceled")
+        self.assertNotIn(("upload_private", 44, pdf_path), calls)
+        self.assertTrue(any("已取消" in message for _, message in calls))
+
     async def test_returns_false_when_queue_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

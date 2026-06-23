@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jmbot.core.persistent_queue import PersistentAlbumQueue
+from jmbot.core.persistent_queue import DuplicateAlbumJobError, PersistentAlbumQueue
 
 
 class PersistentAlbumQueueTest(unittest.TestCase):
@@ -64,6 +64,81 @@ class PersistentAlbumQueueTest(unittest.TestCase):
         self.assertEqual(len(failed_rows), 1)
         self.assertEqual(failed_rows[0].id, failed_job.id)
         self.assertEqual(failed_rows[0].error, "network failed")
+
+    def test_rejects_duplicate_active_job_for_same_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            first = queue.enqueue_group("111111", group_id=10001, user_id=42)
+
+            with self.assertRaises(DuplicateAlbumJobError) as raised:
+                queue.enqueue_group("111111", group_id=10001, user_id=99)
+
+        self.assertEqual(raised.exception.existing_job.id, first.id)
+
+    def test_allows_same_album_for_different_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            group_job = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            other_group_job = queue.enqueue_group("111111", group_id=10002, user_id=43)
+            private_job = queue.enqueue_private("111111", user_id=42)
+
+            jobs = queue.list_jobs()
+
+        self.assertEqual([job.id for job in jobs], [group_job.id, other_group_job.id, private_job.id])
+
+    def test_user_cancel_only_cancels_own_pending_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            job = queue.enqueue_group("111111", group_id=10001, user_id=42)
+
+            result = queue.cancel_pending_for_user("111111", destination_type="group", group_id=10001, user_id=42)
+            rows = queue.list_jobs()
+
+        self.assertEqual(result.status, "canceled")
+        self.assertEqual(result.job.id, job.id)
+        self.assertEqual(rows[0].status, "canceled")
+
+    def test_user_cancel_reports_processing_without_canceling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            job = queue.enqueue_private("111111", user_id=42)
+            queue.claim_next()
+
+            result = queue.cancel_pending_for_user("111111", destination_type="private", group_id=None, user_id=42)
+            rows = queue.list_jobs()
+
+        self.assertEqual(result.status, "processing")
+        self.assertEqual(result.job.id, job.id)
+        self.assertEqual(rows[0].status, "processing")
+
+    def test_admin_clear_and_kill_mark_jobs_canceled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            first = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            second = queue.enqueue_private("222222", user_id=43)
+            queue.claim_next()
+
+            killed = queue.admin_cancel_album("111111", destination_type="group", group_id=10001)
+            cleared = queue.clear_pending()
+            rows = queue.list_jobs()
+
+        self.assertEqual([job.id for job in killed], [first.id])
+        self.assertEqual(cleared, 1)
+        self.assertEqual([job.status for job in rows], ["canceled", "canceled"])
+        self.assertEqual(rows[0].error, "canceled by admin")
+        self.assertEqual(rows[1].error, "cleared by admin")
+
+    def test_admin_jump_moves_job_to_front(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            first = queue.enqueue_private("111111", user_id=42)
+            second = queue.enqueue_private("222222", user_id=43)
+
+            moved = queue.move_to_front(second.id)
+            claimed = queue.claim_next()
+
+        self.assertEqual(moved.id, second.id)
+        self.assertEqual(claimed.id, second.id)
 
 
 if __name__ == "__main__":

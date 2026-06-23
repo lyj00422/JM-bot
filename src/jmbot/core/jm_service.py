@@ -90,10 +90,26 @@ def create_pdf_for_album(
     return pdf_builder(album_dir, output_dir / f"JM{album_id}.pdf")
 
 
-def run_album_job(album_id: str, download_settings: DownloadSettings, output_root: str | Path) -> AlbumJobResult:
+def run_album_job(
+    album_id: str,
+    download_settings: DownloadSettings,
+    output_root: str | Path,
+    *,
+    create_option: CreateOption = jmcomic.create_option,
+    download_album: DownloadAlbum = jmcomic.download_album,
+) -> AlbumJobResult:
     """Run the full album flow: download images, create PDF, return paths."""
 
-    download_result = download_comic(album_id, download_settings)
+    cached_pdf = Path(output_root) / f"JM{album_id}.pdf"
+    if cached_pdf.exists() and cached_pdf.is_file():
+        return AlbumJobResult(album_id=album_id, album_dir=download_settings.download_root / album_id, pdf_path=cached_pdf)
+
+    download_result = download_comic(
+        album_id,
+        download_settings,
+        create_option=create_option,
+        download_album=download_album,
+    )
     pdf_path = create_pdf_for_album(album_id, download_result.album_dir, output_root)
     return AlbumJobResult(album_id=album_id, album_dir=download_result.album_dir, pdf_path=pdf_path)
 
