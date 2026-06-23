@@ -26,6 +26,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_DOWNLOAD_PHOTO_THREADS": "1",
                 "JM_BOT_JMCOMIC_LOG": "false",
                 "JM_BOT_JMCOMIC_RETRY_TIMES": "2",
+                "JM_BOT_JOB_TIMEOUT_SECONDS": "600",
                 "JM_BOT_ALLOWED_GROUPS": "10001,10002",
                 "JM_BOT_SUPERUSERS": "42",
                 "JM_BOT_CLEAN_AFTER_UPLOAD": "false",
@@ -44,6 +45,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.download_photo_threads, 1)
         self.assertFalse(config.jmcomic_log)
         self.assertEqual(config.jmcomic_retry_times, 2)
+        self.assertEqual(config.job_timeout_seconds, 600)
         self.assertEqual(config.allowed_group_ids, {10001, 10002})
         self.assertEqual(config.superuser_ids, {42})
         self.assertFalse(config.clean_after_upload)
@@ -63,6 +65,7 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_DOWNLOAD_IMAGE_THREADS": "0"},
             {"JM_BOT_DOWNLOAD_PHOTO_THREADS": "0"},
             {"JM_BOT_JMCOMIC_RETRY_TIMES": "0"},
+            {"JM_BOT_JOB_TIMEOUT_SECONDS": "0"},
         ]
 
         for env in invalid_cases:

@@ -1,5 +1,8 @@
+import sys
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -35,6 +38,27 @@ class PdfBuilderTest(unittest.TestCase):
 
             self.assertTrue(pdf_path.exists())
             self.assertGreater(pdf_path.stat().st_size, 0)
+        finally:
+            self._remove_tree(root)
+
+    def test_build_pdf_uses_img2pdf_converter_when_available(self):
+        root = Path(self._testMethodName)
+        calls = []
+
+        def convert(paths):
+            calls.append(paths)
+            return b"%PDF-1.4\n% fake\n"
+
+        try:
+            make_image(root / "001.jpg", (255, 0, 0))
+            make_image(root / "002.png", (0, 0, 255))
+
+            fake_img2pdf = types.SimpleNamespace(convert=convert)
+            with patch.dict(sys.modules, {"img2pdf": fake_img2pdf}):
+                pdf_path = build_pdf(root, root / "out.pdf")
+
+            self.assertEqual(pdf_path.read_bytes(), b"%PDF-1.4\n% fake\n")
+            self.assertEqual(calls, [[str(root / "001.jpg"), str(root / "002.png")]])
         finally:
             self._remove_tree(root)
 

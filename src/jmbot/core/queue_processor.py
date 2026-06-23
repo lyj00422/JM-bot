@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -19,6 +21,7 @@ PrivateUploader = Callable[[int, Path], Awaitable[None]]
 Notifier = Callable[[AlbumQueueJob, str], Awaitable[None]]
 Cleaner = Callable[[Path, Path], Awaitable[None]]
 CancelChecker = Callable[[int], bool]
+LOGGER = logging.getLogger(__name__)
 
 
 async def process_next_album_job(
@@ -37,9 +40,12 @@ async def process_next_album_job(
     if job is None:
         return False
 
+    started = time.monotonic()
+    LOGGER.info("Starting JM%s queue job %s for %s", job.album_id, job.id, job.destination_type)
     try:
         await _notify_safely(notify, job, format_task_started(job.album_id))
         result = await run_job(job.album_id)
+        LOGGER.info("Built JM%s PDF for queue job %s: %s", job.album_id, job.id, result.pdf_path)
         if is_canceled is not None and is_canceled(job.id):
             if cleanup is not None:
                 await cleanup(result.album_dir, result.pdf_path)
@@ -52,6 +58,7 @@ async def process_next_album_job(
             await upload_group(job.group_id, result.pdf_path)
         else:
             await upload_private(job.user_id, result.pdf_path)
+        LOGGER.info("Uploaded JM%s PDF for queue job %s", job.album_id, job.id)
 
         if cleanup is not None:
             await cleanup(result.album_dir, result.pdf_path)
@@ -63,8 +70,10 @@ async def process_next_album_job(
             return True
 
         queue.mark_failed(job.id, str(exc))
+        LOGGER.exception("JM%s queue job %s failed after %.1f seconds", job.album_id, job.id, time.monotonic() - started)
         await _notify_safely(notify, job, format_task_failed(job.album_id))
     else:
+        LOGGER.info("Finished JM%s queue job %s in %.1f seconds", job.album_id, job.id, time.monotonic() - started)
         await _notify_safely(notify, job, format_task_uploaded(job.album_id, result.pdf_path.name))
 
     return True

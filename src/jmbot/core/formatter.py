@@ -15,6 +15,10 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 123456 - 加入下载队列",
             f"{prefix} 撤回 123456 - 撤回自己的排队任务",
             f"{prefix} 队列 - 查看当前队列",
+            f"{prefix} 我的 - 查看自己的当前任务",
+            f"{prefix} 历史 - 查看自己的最近任务",
+            f"{prefix} 历史 失败 - 查看自己的失败任务",
+            f"{prefix} 重试 123456 - 重试自己的失败任务",
             f"{prefix} 帮助 - 查看本帮助",
             "",
             "管理员：",
@@ -22,6 +26,7 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 管理 kill 123456",
             f"{prefix} 管理 kill 全部 123456",
             f"{prefix} 管理 插队 123456",
+            f"{prefix} 管理 失败",
         ]
     )
 
@@ -90,7 +95,7 @@ def format_task_history(jobs: Sequence[AlbumQueueJob], *, failed_only: bool = Fa
     title = "你最近失败的任务：" if failed_only else "你最近的任务："
     lines = [title]
     for index, job in enumerate(jobs, start=1):
-        error = f"：{job.error}" if job.status == "failed" and job.error else ""
+        error = "：失败原因已记录，请稍后重试或联系管理员" if job.status == "failed" else ""
         lines.append(f"{index}. JM{job.album_id} {job.status}{error}")
     return "\n".join(lines)
 
@@ -105,6 +110,12 @@ def format_retry_missing(album_id: str) -> str:
     """Return message when no retryable failure belongs to the caller."""
 
     return f"没有找到你在这里失败过的 JM{album_id} 任务。"
+
+
+def format_retry_duplicate(album_id: str, ahead_count: int) -> str:
+    """Return message when the retry target is already active."""
+
+    return f"JM{album_id} 已经在队列中，前面还有{ahead_count}篇漫画正在处理。"
 
 
 def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:

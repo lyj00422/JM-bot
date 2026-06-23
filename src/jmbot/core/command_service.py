@@ -6,6 +6,7 @@ from jmbot.core.formatter import (
     format_admin_failed_tasks,
     format_my_tasks,
     format_queue_summary,
+    format_retry_duplicate,
     format_retry_enqueued,
     format_retry_missing,
     format_task_history,
@@ -97,6 +98,7 @@ def retry_failed_album(queue: PersistentAlbumQueue, album_id: str, target: Queue
         job = _enqueue(queue, album_id, target)
     except DuplicateAlbumJobError as exc:
         job = exc.existing_job
+        return format_retry_duplicate(album_id, queue.count_ahead(job.id))
 
     return format_retry_enqueued(album_id, queue.count_ahead(job.id))
 
