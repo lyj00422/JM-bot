@@ -45,6 +45,29 @@ def build_pdf(image_root: str | Path, out_pdf: str | Path) -> Path:
     output = Path(out_pdf)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    if _build_pdf_with_img2pdf(images, output):
+        return output
+
+    return _build_pdf_with_pillow(images, output)
+
+
+def _build_pdf_with_img2pdf(images: list[Path], output: Path) -> bool:
+    try:
+        import img2pdf
+    except ImportError:
+        return False
+
+    try:
+        output.write_bytes(img2pdf.convert([str(path) for path in images]))
+    except Exception:
+        if output.exists():
+            output.unlink()
+        return False
+
+    return True
+
+
+def _build_pdf_with_pillow(images: list[Path], output: Path) -> Path:
     pil_images = [_open_rgb(path) for path in images]
     try:
         first, rest = pil_images[0], pil_images[1:]

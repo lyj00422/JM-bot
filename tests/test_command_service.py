@@ -109,6 +109,20 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("已重新加入队列", message)
         self.assertEqual([job.album_id for job in active_jobs], ["111111"])
 
+    def test_retry_failed_album_reports_existing_active_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
+            failed = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            queue.mark_failed(failed.id, "network failed")
+            queue.enqueue_group("111111", group_id=10001, user_id=42)
+
+            message = retry_failed_album(queue, "111111", target)
+            active_jobs = queue.list_active_for_user(destination_type="group", group_id=10001, user_id=42)
+
+        self.assertIn("已经在队列中", message)
+        self.assertEqual(len(active_jobs), 1)
+
     def test_retry_failed_album_rejects_missing_or_other_user_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

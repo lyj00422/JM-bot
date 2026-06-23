@@ -22,6 +22,7 @@ class BotConfig:
     download_photo_threads: int
     jmcomic_log: bool
     jmcomic_retry_times: int
+    job_timeout_seconds: int
     allowed_group_ids: set[int]
     superuser_ids: set[int]
     clean_after_upload: bool
@@ -84,6 +85,7 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         download_photo_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_PHOTO_THREADS", 2),
         jmcomic_log=parse_bool(source.get("JM_BOT_JMCOMIC_LOG"), True),
         jmcomic_retry_times=parse_positive_int(source, "JM_BOT_JMCOMIC_RETRY_TIMES", 5),
+        job_timeout_seconds=parse_positive_int(source, "JM_BOT_JOB_TIMEOUT_SECONDS", 1800),
         allowed_group_ids=parse_int_set(source.get("JM_BOT_ALLOWED_GROUPS")),
         superuser_ids=parse_int_set(source.get("JM_BOT_SUPERUSERS")),
         clean_after_upload=parse_bool(source.get("JM_BOT_CLEAN_AFTER_UPLOAD"), True),

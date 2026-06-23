@@ -145,9 +145,10 @@ JM_BOT_DOWNLOAD_IMAGE_THREADS=10
 JM_BOT_DOWNLOAD_PHOTO_THREADS=2
 JM_BOT_JMCOMIC_LOG=true
 JM_BOT_JMCOMIC_RETRY_TIMES=5
+JM_BOT_JOB_TIMEOUT_SECONDS=1800
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。小内存服务器优先降低这些值。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。小内存服务器优先降低线程数，并保留任务超时保护。
 
 ## 服务器部署
 
@@ -323,10 +324,11 @@ JM_BOT_DOWNLOAD_IMAGE_THREADS=2
 JM_BOT_DOWNLOAD_PHOTO_THREADS=1
 JM_BOT_JMCOMIC_LOG=false
 JM_BOT_JMCOMIC_RETRY_TIMES=3
+JM_BOT_JOB_TIMEOUT_SECONDS=1800
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
-这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
+这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。PDF 生成会优先使用 `img2pdf` 以减少整本图片一次性解码带来的内存压力；如果转换失败，会回退到 Pillow。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
 
 ## 运行时文件
 

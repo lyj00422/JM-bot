@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 import nonebot
 from nonebot import get_driver, on_message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
@@ -24,7 +23,8 @@ from jmbot.core.command_service import (
 )
 from jmbot.core.cleanup import cleanup_album_files
 from jmbot.core.formatter import format_help
-from jmbot.core.jm_service import DownloadSettings, run_album_job
+from jmbot.core.jm_service import DownloadSettings
+from jmbot.core.job_executor import run_album_job_with_timeout
 from jmbot.core.message_scope import is_friend_private_message
 from jmbot.core.parser import JmMessage, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
@@ -93,12 +93,13 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
     if target is None:
         return
 
-    should_start_worker = await _handle_parsed_command(event, command, target)
+    should_start_worker = await _handle_parsed_command(bot, event, command, target)
     if should_start_worker:
         await _ensure_queue_worker(bot)
 
 
 async def _handle_parsed_command(
+    bot: Bot,
     event: MessageEvent,
     command: JmMessage,
     target: QueueTarget,
@@ -160,7 +161,12 @@ async def _handle_parsed_command(
         return True
 
     if command.action == "admin_failed":
-        await jm_matcher.send(admin_failed_tasks(ALBUM_QUEUE))
+        message = admin_failed_tasks(ALBUM_QUEUE)
+        if isinstance(event, GroupMessageEvent):
+            await bot.call_api("send_private_msg", user_id=event.user_id, message=message)
+            await jm_matcher.send("最近失败任务已私聊发送给管理员。")
+        else:
+            await jm_matcher.send(message)
         return False
 
     return False
@@ -190,7 +196,13 @@ async def _drain_album_queue(bot: Bot) -> None:
     while True:
         processed = await process_next_album_job(
             ALBUM_QUEUE,
-            run_job=lambda album_id: asyncio.to_thread(run_album_job, album_id, DOWNLOAD_SETTINGS, CONFIG.output_root),
+            run_job=lambda album_id: asyncio.to_thread(
+                run_album_job_with_timeout,
+                album_id,
+                DOWNLOAD_SETTINGS,
+                CONFIG.output_root,
+                timeout_seconds=CONFIG.job_timeout_seconds,
+            ),
             upload_group=lambda group_id, pdf_path: upload_group_pdf(
                 bot, group_id, pdf_path, CONFIG.group_folder_name
             ),
