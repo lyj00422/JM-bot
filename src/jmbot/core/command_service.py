@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jmbot.core.formatter import format_queue_summary
+from jmbot.core.formatter import (
+    format_admin_failed_tasks,
+    format_my_tasks,
+    format_queue_summary,
+    format_retry_enqueued,
+    format_retry_missing,
+    format_task_history,
+)
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 
 
@@ -49,6 +56,55 @@ def queue_summary(queue: PersistentAlbumQueue, *, limit: int = 10) -> str:
 
     active_jobs = [job for job in queue.list_jobs() if job.status in {"pending", "processing"}]
     return format_queue_summary(active_jobs, limit=limit)
+
+
+def my_tasks_summary(queue: PersistentAlbumQueue, target: QueueTarget) -> str:
+    """Return the caller's active jobs in the current context."""
+
+    jobs = queue.list_active_for_user(
+        destination_type=target.destination_type,
+        group_id=target.group_id,
+        user_id=target.user_id,
+    )
+    return format_my_tasks([(job, queue.count_ahead(job.id)) for job in jobs])
+
+
+def task_history(queue: PersistentAlbumQueue, target: QueueTarget, *, failed_only: bool = False) -> str:
+    """Return the caller's recent task history in the current context."""
+
+    jobs = queue.list_history_for_user(
+        destination_type=target.destination_type,
+        group_id=target.group_id,
+        user_id=target.user_id,
+        failed_only=failed_only,
+    )
+    return format_task_history(jobs, failed_only=failed_only)
+
+
+def retry_failed_album(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget) -> str:
+    """Retry the caller's latest failed job for this album in the current context."""
+
+    failed = queue.find_latest_failed_for_user(
+        album_id,
+        destination_type=target.destination_type,
+        group_id=target.group_id,
+        user_id=target.user_id,
+    )
+    if failed is None:
+        return format_retry_missing(album_id)
+
+    try:
+        job = _enqueue(queue, album_id, target)
+    except DuplicateAlbumJobError as exc:
+        job = exc.existing_job
+
+    return format_retry_enqueued(album_id, queue.count_ahead(job.id))
+
+
+def admin_failed_tasks(queue: PersistentAlbumQueue, *, limit: int = 10) -> str:
+    """Return recent failed jobs across all contexts for admins."""
+
+    return format_admin_failed_tasks(queue.list_failed_jobs(limit=limit))
 
 
 def admin_clear_queue(queue: PersistentAlbumQueue) -> str:

@@ -63,3 +63,59 @@ def format_task_failed(album_id: str) -> str:
     """Return a friendly failure message without exposing raw exception text."""
 
     return f"JM{album_id} 处理失败，请稍后重试或联系管理员查看原因。"
+
+
+def format_my_tasks(job_positions: Sequence[tuple[AlbumQueueJob, int]]) -> str:
+    """Return active jobs for the caller's current context."""
+
+    if not job_positions:
+        return "你当前没有排队或正在处理的任务。"
+
+    lines = ["你当前的任务："]
+    for index, (job, ahead_count) in enumerate(job_positions, start=1):
+        if job.status == "processing":
+            detail = "正在处理"
+        else:
+            detail = f"前面还有 {ahead_count} 个任务"
+        lines.append(f"{index}. JM{job.album_id} {job.status}，{detail}")
+    return "\n".join(lines)
+
+
+def format_task_history(jobs: Sequence[AlbumQueueJob], *, failed_only: bool = False) -> str:
+    """Return recent task history for the caller's current context."""
+
+    if not jobs:
+        return "你最近没有失败任务。" if failed_only else "你最近没有已完成、失败或取消的任务。"
+
+    title = "你最近失败的任务：" if failed_only else "你最近的任务："
+    lines = [title]
+    for index, job in enumerate(jobs, start=1):
+        error = f"：{job.error}" if job.status == "failed" and job.error else ""
+        lines.append(f"{index}. JM{job.album_id} {job.status}{error}")
+    return "\n".join(lines)
+
+
+def format_retry_enqueued(album_id: str, ahead_count: int) -> str:
+    """Return retry enqueue confirmation."""
+
+    return f"JM{album_id} 已重新加入队列，前面还有{ahead_count}篇漫画正在处理。"
+
+
+def format_retry_missing(album_id: str) -> str:
+    """Return message when no retryable failure belongs to the caller."""
+
+    return f"没有找到你在这里失败过的 JM{album_id} 任务。"
+
+
+def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:
+    """Return recent failed jobs for admins."""
+
+    if not jobs:
+        return "最近没有失败任务。"
+
+    lines = ["最近失败任务："]
+    for job in jobs:
+        target = f"群 {job.group_id}" if job.destination_type == "group" else f"私聊 {job.user_id}"
+        error = f"：{job.error}" if job.error else ""
+        lines.append(f"#{job.id} JM{job.album_id} {target}{error}")
+    return "\n".join(lines)

@@ -12,11 +12,15 @@ from jmbot.config import load_config
 from jmbot.core.command_service import (
     QueueTarget,
     admin_clear_queue,
+    admin_failed_tasks,
     admin_jump_album,
     admin_kill_album,
     cancel_album_request,
     enqueue_album_request,
+    my_tasks_summary,
     queue_summary,
+    retry_failed_album,
+    task_history,
 )
 from jmbot.core.cleanup import cleanup_album_files
 from jmbot.core.formatter import format_help
@@ -119,6 +123,20 @@ async def _handle_parsed_command(
         await jm_matcher.send(format_help(CONFIG.command_prefix))
         return False
 
+    if command.action == "my_tasks":
+        await jm_matcher.send(my_tasks_summary(ALBUM_QUEUE, target))
+        return False
+
+    if command.action == "history":
+        await jm_matcher.send(task_history(ALBUM_QUEUE, target, failed_only=command.failed_only))
+        return False
+
+    if command.action == "retry":
+        if command.album_id is None:
+            return False
+        await jm_matcher.send(retry_failed_album(ALBUM_QUEUE, command.album_id, target))
+        return True
+
     if event.user_id not in CONFIG.superuser_ids:
         await jm_matcher.send("你没有 JM 管理权限。")
         return False
@@ -140,6 +158,10 @@ async def _handle_parsed_command(
             return False
         await jm_matcher.send(admin_jump_album(ALBUM_QUEUE, command.album_id, target))
         return True
+
+    if command.action == "admin_failed":
+        await jm_matcher.send(admin_failed_tasks(ALBUM_QUEUE))
+        return False
 
     return False
 
