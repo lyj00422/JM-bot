@@ -97,8 +97,10 @@ class JmServiceTest(unittest.TestCase):
             output_dir.mkdir()
             part1 = output_dir / "JM123456.part1.pdf"
             part2 = output_dir / "JM123456.part2.pdf"
+            manifest = output_dir / "JM123456.parts.txt"
             part1.write_bytes(b"pdf1")
             part2.write_bytes(b"pdf2")
+            manifest.write_text("JM123456.part1.pdf\nJM123456.part2.pdf\n", encoding="utf-8")
 
             def fake_create_option(option_path):
                 raise AssertionError("create_option should not run when split PDFs exist")
@@ -117,6 +119,38 @@ class JmServiceTest(unittest.TestCase):
         self.assertEqual(result.album_id, "123456")
         self.assertEqual(result.pdf_path, part1)
         self.assertEqual(result.output_paths, (part1, part2))
+
+    def test_run_album_job_ignores_incomplete_split_cache_without_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "output"
+            output_dir.mkdir()
+            stale_part = output_dir / "JM123456.part1.pdf"
+            stale_part.write_bytes(b"incomplete")
+            calls = []
+
+            def fake_downloader(album_id, option):
+                calls.append(album_id)
+                album_dir = root / "downloads" / album_id
+                album_dir.mkdir(parents=True, exist_ok=True)
+                for index in range(1, 4):
+                    Image.new("RGB", (8, 8), (index, 0, 0)).save(album_dir / f"{index:03d}.jpg")
+
+            result = run_album_job(
+                "123456",
+                DownloadSettings(
+                    download_root=root / "downloads",
+                    option_root=root / "options",
+                    auto_split_pdf=True,
+                    split_image_count=2,
+                ),
+                output_dir,
+                create_option=lambda option_path: object(),
+                download_album=fake_downloader,
+            )
+
+        self.assertEqual(calls, ["123456"])
+        self.assertEqual([path.name for path in result.output_paths], ["JM123456.part1.pdf", "JM123456.part2.pdf"])
 
     def test_run_album_job_splits_large_album_into_part_pdfs(self):
         with tempfile.TemporaryDirectory() as tmp:

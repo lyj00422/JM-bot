@@ -72,6 +72,9 @@ def build_split_pdfs(
         chunk = images[start : start + images_per_part]
         output = output_root / f"{base_name}.part{part_index}.pdf"
         parts.append(_build_pdf_from_images(chunk, output))
+
+    manifest = output_root / f"{base_name}.parts.txt"
+    manifest.write_text("\n".join(part.name for part in parts) + "\n", encoding="utf-8")
     return tuple(parts)
 
 
