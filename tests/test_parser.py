@@ -42,6 +42,20 @@ class ParseJmCommandTest(unittest.TestCase):
         self.assertEqual(result.action, "queue")
         self.assertIsNone(result.album_id)
 
+    def test_parse_help_command(self):
+        result = parse_jm_message("/jm 帮助")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "help")
+        self.assertIsNone(result.album_id)
+
+    def test_parse_help_alias(self):
+        result = parse_jm_message("/jm help")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "help")
+        self.assertIsNone(result.album_id)
+
     def test_parse_admin_commands(self):
         cases = [
             ("/jm 管理 清空", "admin_clear", None, False),

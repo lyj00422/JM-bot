@@ -12,7 +12,7 @@ class JmCommand:
     album_id: str
 
 
-JmAction = Literal["request", "cancel", "queue", "admin_clear", "admin_kill", "admin_jump"]
+JmAction = Literal["request", "cancel", "queue", "help", "admin_clear", "admin_kill", "admin_jump"]
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,9 @@ def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | N
 
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")
+
+    if re.match(rf"^\s*{prefix}\s+(帮助|help)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="help")
 
     if re.match(rf"^\s*{prefix}\s+管理\s+清空\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_clear")

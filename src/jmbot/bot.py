@@ -19,6 +19,7 @@ from jmbot.core.command_service import (
     queue_summary,
 )
 from jmbot.core.cleanup import cleanup_album_files
+from jmbot.core.formatter import format_help
 from jmbot.core.jm_service import DownloadSettings, run_album_job
 from jmbot.core.message_scope import is_friend_private_message
 from jmbot.core.parser import JmMessage, parse_jm_message
@@ -112,6 +113,10 @@ async def _handle_parsed_command(
 
     if command.action == "queue":
         await jm_matcher.send(queue_summary(ALBUM_QUEUE))
+        return False
+
+    if command.action == "help":
+        await jm_matcher.send(format_help(CONFIG.command_prefix))
         return False
 
     if event.user_id not in CONFIG.superuser_ids:
