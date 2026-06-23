@@ -39,7 +39,7 @@ async def upload_group_pdf(bot: ApiBot, group_id: int, file_path: str | Path, fo
     await bot.call_api(
         "upload_group_file",
         group_id=group_id,
-        file=str(path.resolve()),
+        file=path.resolve().as_uri(),
         name=path.name,
         folder=folder_id,
     )
@@ -52,7 +52,7 @@ async def upload_private_pdf(bot: ApiBot, user_id: int, file_path: str | Path) -
     await bot.call_api(
         "upload_private_file",
         user_id=user_id,
-        file=str(path.resolve()),
+        file=path.resolve().as_uri(),
         name=path.name,
     )
 

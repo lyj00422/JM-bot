@@ -128,12 +128,12 @@ sudo systemctl restart jmbot
 
 ```bash
 # 本地机器
-scp JMbot-v0.2.1.tar.gz root@你的服务器IP:/tmp/
+scp JMbot-v0.2.2.tar.gz root@你的服务器IP:/tmp/
 
 # 服务器
 sudo systemctl stop jmbot
 sudo mkdir -p /opt/jmbot
-sudo tar -xzf /tmp/JMbot-v0.2.1.tar.gz -C /opt/jmbot --strip-components=1
+sudo tar -xzf /tmp/JMbot-v0.2.2.tar.gz -C /opt/jmbot --strip-components=1
 cd /opt/jmbot
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
