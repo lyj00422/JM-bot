@@ -163,12 +163,23 @@ def run_album_job(
 
 
 def _cached_split_pdfs(output_root: Path, album_id: str) -> tuple[Path, ...]:
+    manifest = output_root / f"JM{album_id}.parts.txt"
+    if not manifest.is_file():
+        return ()
+
     part_pattern = re.compile(rf"^JM{re.escape(album_id)}\.part(\d+)\.pdf$")
     indexed_parts: list[tuple[int, Path]] = []
-    for path in output_root.glob(f"JM{album_id}.part*.pdf"):
-        match = part_pattern.match(path.name)
-        if match is not None and path.is_file():
-            indexed_parts.append((int(match.group(1)), path))
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        name = line.strip()
+        if not name or Path(name).name != name:
+            return ()
+
+        match = part_pattern.match(name)
+        path = output_root / name
+        if match is None or not path.is_file():
+            return ()
+
+        indexed_parts.append((int(match.group(1)), path))
 
     return tuple(path for _, path in sorted(indexed_parts))
 
