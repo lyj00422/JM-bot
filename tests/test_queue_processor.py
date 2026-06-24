@@ -242,6 +242,98 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(("upload_private", 44, pdf_path), calls)
         self.assertTrue(any("已取消" in message for _, message in calls))
 
+    async def test_stops_remaining_parts_when_canceled_during_upload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("555555", user_id=44)
+            part1 = Path(tmp) / "JM555555.part1.pdf"
+            part2 = Path(tmp) / "JM555555.part2.pdf"
+            part1.write_bytes(b"pdf1")
+            part2.write_bytes(b"pdf2")
+            uploaded = []
+
+            async def run_job(album_id):
+                return AlbumJobResult(
+                    album_id=album_id,
+                    album_dir=Path(tmp) / album_id,
+                    pdf_path=part1,
+                    pdf_paths=(part1, part2),
+                )
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                uploaded.append(path)
+                queue.admin_cancel_album(
+                    queued.album_id,
+                    destination_type="private",
+                    user_id=queued.user_id,
+                )
+
+            async def notify(job, message):
+                return None
+
+            await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                is_canceled=queue.is_canceled,
+            )
+
+            row = queue.list_jobs()[0]
+
+        self.assertEqual(uploaded, [part1])
+        self.assertEqual(row.status, "canceled")
+
+    async def test_preserves_canceled_status_when_canceled_during_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("666666", user_id=44)
+            pdf_path = Path(tmp) / "JM666666.pdf"
+            pdf_path.write_bytes(b"pdf")
+            notifications = []
+
+            async def run_job(album_id):
+                return AlbumJobResult(
+                    album_id=album_id,
+                    album_dir=Path(tmp) / album_id,
+                    pdf_path=pdf_path,
+                )
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                return None
+
+            async def cleanup(album_dir, path):
+                queue.admin_cancel_album(
+                    queued.album_id,
+                    destination_type="private",
+                    user_id=queued.user_id,
+                )
+
+            async def notify(job, message):
+                notifications.append(message)
+
+            await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                cleanup=cleanup,
+                is_canceled=queue.is_canceled,
+            )
+
+            row = queue.list_jobs()[0]
+
+        self.assertEqual(row.status, "canceled")
+        self.assertEqual(len(notifications), 2)
+
     async def test_returns_false_when_queue_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

@@ -59,17 +59,32 @@ async def process_next_album_job(
             if job.group_id is None:
                 raise ValueError(f"Group job {job.id} is missing group_id")
             for pdf_path in output_paths:
+                if is_canceled is not None and is_canceled(job.id):
+                    break
                 await upload_group(job.group_id, pdf_path)
         else:
             for pdf_path in output_paths:
+                if is_canceled is not None and is_canceled(job.id):
+                    break
                 await upload_private(job.user_id, pdf_path)
         LOGGER.info("Uploaded JM%s PDF(s) for queue job %s: %s", job.album_id, job.id, output_names)
+
+        if is_canceled is not None and is_canceled(job.id):
+            if cleanup is not None:
+                for pdf_path in output_paths:
+                    await cleanup(result.album_dir, pdf_path)
+            await _notify_safely(notify, job, format_task_canceled(job.album_id))
+            return True
 
         if cleanup is not None:
             for pdf_path in output_paths:
                 await cleanup(result.album_dir, pdf_path)
 
-        queue.mark_done(job.id)
+        if not queue.mark_done_if_processing(job.id):
+            if queue.is_canceled(job.id):
+                await _notify_safely(notify, job, format_task_canceled(job.album_id))
+                return True
+            raise RuntimeError(f"Queue job {job.id} left processing state before completion")
     except Exception as exc:
         if is_canceled is not None and is_canceled(job.id):
             await _notify_safely(notify, job, format_task_canceled(job.album_id))

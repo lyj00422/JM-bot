@@ -65,6 +65,24 @@ class PersistentAlbumQueueTest(unittest.TestCase):
         self.assertEqual(failed_rows[0].id, failed_job.id)
         self.assertEqual(failed_rows[0].error, "network failed")
 
+    def test_mark_done_if_processing_does_not_overwrite_canceled_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("333333", user_id=44)
+            claimed = queue.claim_next()
+            self.assertEqual(claimed.id, queued.id)
+            queue.admin_cancel_album(
+                queued.album_id,
+                destination_type="private",
+                user_id=queued.user_id,
+            )
+
+            changed = queue.mark_done_if_processing(queued.id)
+            row = queue.list_jobs()[0]
+
+        self.assertFalse(changed)
+        self.assertEqual(row.status, "canceled")
+
     def test_rejects_duplicate_active_job_for_same_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import traceback
 from collections.abc import Callable
+from multiprocessing.connection import wait
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -30,24 +31,38 @@ def run_with_timeout(
     process.start()
     child_connection.close()
 
-    process.join(timeout_seconds)
-    if process.is_alive():
-        process.terminate()
-        process.join(5)
-        if process.is_alive():
-            process.kill()
-            process.join()
-        raise JobTimeoutError(f"Job exceeded {timeout_seconds:g} seconds")
+    try:
+        ready = wait([parent_connection, process.sentinel], timeout_seconds)
+        if not ready:
+            process.terminate()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            raise JobTimeoutError(f"Job exceeded {timeout_seconds:g} seconds")
 
-    if parent_connection.poll():
-        status, payload = parent_connection.recv()
-        if status == "ok":
-            return payload
+        if parent_connection in ready or parent_connection.poll():
+            try:
+                status, payload = parent_connection.recv()
+            except EOFError:
+                process.join()
+                raise RuntimeError(f"Job process exited without a result, exit code: {process.exitcode}") from None
 
-        exc_type, message, child_traceback = payload
-        raise RuntimeError(f"{exc_type}: {message}\n{child_traceback}")
+            process.join(5)
+            if process.is_alive():
+                process.terminate()
+                process.join()
 
-    raise RuntimeError(f"Job process exited without a result, exit code: {process.exitcode}")
+            if status == "ok":
+                return payload
+
+            exc_type, message, child_traceback = payload
+            raise RuntimeError(f"{exc_type}: {message}\n{child_traceback}")
+
+        process.join()
+        raise RuntimeError(f"Job process exited without a result, exit code: {process.exitcode}")
+    finally:
+        parent_connection.close()
 
 
 def run_album_job_with_timeout(
