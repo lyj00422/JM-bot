@@ -31,7 +31,6 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_SPLIT_IMAGE_COUNT": "50",
                 "JM_BOT_QUERY_TIMEOUT_SECONDS": "15",
                 "JM_BOT_QUERY_MAX_CONCURRENCY": "2",
-                "JM_BOT_SEARCH_CACHE_TTL_SECONDS": "500",
                 "JM_BOT_DETAIL_CACHE_TTL_SECONDS": "200",
                 "JM_BOT_QUERY_CACHE_MAX_ENTRIES": "64",
                 "JM_BOT_ALLOWED_GROUPS": "10001,10002",
@@ -57,7 +56,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.split_image_count, 50)
         self.assertEqual(config.query_timeout_seconds, 15)
         self.assertEqual(config.query_max_concurrency, 2)
-        self.assertEqual(config.search_cache_ttl_seconds, 500)
         self.assertEqual(config.detail_cache_ttl_seconds, 200)
         self.assertEqual(config.query_cache_max_entries, 64)
         self.assertEqual(config.allowed_group_ids, {10001, 10002})
@@ -81,7 +79,6 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.split_image_count, 80)
         self.assertEqual(config.query_timeout_seconds, 20)
         self.assertEqual(config.query_max_concurrency, 1)
-        self.assertEqual(config.search_cache_ttl_seconds, 600)
         self.assertEqual(config.detail_cache_ttl_seconds, 300)
         self.assertEqual(config.query_cache_max_entries, 128)
 
@@ -94,7 +91,6 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_SPLIT_IMAGE_COUNT": "0"},
             {"JM_BOT_QUERY_TIMEOUT_SECONDS": "0"},
             {"JM_BOT_QUERY_MAX_CONCURRENCY": "0"},
-            {"JM_BOT_SEARCH_CACHE_TTL_SECONDS": "0"},
             {"JM_BOT_DETAIL_CACHE_TTL_SECONDS": "0"},
             {"JM_BOT_QUERY_CACHE_MAX_ENTRIES": "0"},
         ]

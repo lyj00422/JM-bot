@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from jmbot.core.catalog_service import AlbumDetail, SearchResultPage
+from jmbot.core.catalog_service import AlbumDetail
 from jmbot.core.persistent_queue import AlbumQueueJob
 
 
@@ -15,8 +15,6 @@ def format_help(command_prefix: str = "/jm") -> str:
             "JMbot 可用命令：",
             f"{prefix} 123456 - 加入下载队列",
             f"{prefix} 详情 123456 - 查看漫画详情",
-            f"{prefix} 搜索 关键词 - 搜索漫画",
-            f"{prefix} 下载 1 - 下载最近搜索结果",
             f"{prefix} 撤回 123456 - 撤回自己的排队任务",
             f"{prefix} 队列 - 查看当前队列",
             f"{prefix} 我的 - 查看自己的当前任务",
@@ -38,41 +36,21 @@ def format_help(command_prefix: str = "/jm") -> str:
 def format_album_detail(detail: AlbumDetail, command_prefix: str = "/jm") -> str:
     """Return compact album metadata suitable for QQ."""
 
-    authors = " / ".join(detail.authors) or "未知"
-    page_count = str(detail.page_count) if detail.page_count is not None else "未知"
     lines = [
         f"JM{detail.album_id}",
         f"标题：{detail.title}",
-        f"作者：{authors}",
-        f"页数：{page_count}",
     ]
+    if detail.authors:
+        lines.append(f"作者：{' / '.join(detail.authors)}")
+    if detail.page_count is not None:
+        lines.append(f"页数：{detail.page_count}")
     if detail.tags:
         lines.append(f"标签：{' / '.join(detail.tags[:10])}")
     if detail.chapters:
         lines.append(f"章节：{'、'.join(detail.chapters[:10])}")
-    lines.append(f"更新时间：{detail.update_time or '未知'}")
+    if detail.update_time is not None:
+        lines.append(f"更新时间：{detail.update_time}")
     lines.extend(["", f"发送 {command_prefix} {detail.album_id} 加入下载队列"])
-    return "\n".join(lines)
-
-
-def format_search_results(result: SearchResultPage, command_prefix: str = "/jm") -> str:
-    """Return one compact search page."""
-
-    if not result.items:
-        return f"没有找到与“{result.keyword}”相关的漫画。"
-
-    lines = [f"搜索：{result.keyword}（第 {result.page} 页）"]
-    for index, item in enumerate(result.items, start=1):
-        lines.append(f"{index}. JM{item.album_id} {item.title}")
-        if item.tags:
-            lines.append(f"   标签：{' / '.join(item.tags[:4])}")
-    lines.extend(
-        [
-            "",
-            f"发送 {command_prefix} 下载 1 下载对应结果",
-            f"发送 {command_prefix} 看 {result.items[0].album_id} 查看详情",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -178,6 +156,12 @@ def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:
     lines = ["最近失败任务："]
     for job in jobs:
         target = f"群 {job.group_id}" if job.destination_type == "group" else f"私聊 {job.user_id}"
-        error = f"：{job.error}" if job.error else ""
+        error = f"：{_format_admin_error(job.error)}" if job.error else ""
         lines.append(f"#{job.id} JM{job.album_id} {target}{error}")
     return "\n".join(lines)
+
+
+def _format_admin_error(error: str) -> str:
+    if "ENOENT" in error and "/opt/jmbot/data/output/" in error:
+        return "NapCat 无法访问输出文件，请检查 /opt/jmbot 挂载并重建 NapCat 容器"
+    return error

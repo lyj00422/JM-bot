@@ -1,12 +1,12 @@
 import unittest
 
-from jmbot.core.catalog_service import AlbumDetail, AlbumSummary, SearchResultPage
+from jmbot.core.catalog_service import AlbumDetail
 from jmbot.core.formatter import (
     format_album_detail,
+    format_admin_failed_tasks,
     format_help,
     format_query_failed,
     format_queue_summary,
-    format_search_results,
     format_task_failed,
     format_task_history,
 )
@@ -35,12 +35,12 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 管理 插队 123456", message)
         self.assertIn("/jm 管理 失败", message)
 
-    def test_format_help_lists_catalog_commands_but_not_other_future_features(self):
+    def test_format_help_lists_detail_but_not_removed_search_features(self):
         message = format_help("/jm")
 
-        self.assertIn("/jm 搜索 关键词", message)
         self.assertIn("/jm 详情 123456", message)
-        self.assertIn("/jm 下载 1", message)
+        self.assertNotIn("搜索", message)
+        self.assertNotIn("/jm 下载 1", message)
         self.assertNotIn("zip", message.lower())
 
     def test_format_album_detail_limits_tags_and_chapters(self):
@@ -66,30 +66,54 @@ class FormatterTest(unittest.TestCase):
         self.assertNotIn("第10话", message)
         self.assertIn("/jm 123456", message)
 
-    def test_format_search_results_lists_five_items_and_next_actions(self):
-        result = SearchResultPage(
-            keyword="关键词",
-            page=2,
-            total=20,
-            items=tuple(
-                AlbumSummary(str(100000 + index), f"标题{index}", (f"标签{index}",))
-                for index in range(1, 6)
-            ),
+    def test_format_album_detail_omits_missing_optional_fields(self):
+        detail = AlbumDetail(
+            album_id="123456",
+            title="测试漫画",
+            authors=(),
+            page_count=None,
+            tags=(),
+            chapters=(),
+            update_time=None,
         )
 
-        message = format_search_results(result)
+        message = format_album_detail(detail)
 
-        self.assertIn("搜索：关键词（第 2 页）", message)
-        self.assertIn("1. JM100001 标题1", message)
-        self.assertIn("5. JM100005 标题5", message)
-        self.assertIn("/jm 下载 1", message)
-        self.assertIn("/jm 看 100001", message)
+        self.assertIn("JM123456", message)
+        self.assertIn("标题：测试漫画", message)
+        self.assertNotIn("作者：", message)
+        self.assertNotIn("页数：", message)
+        self.assertNotIn("标签：", message)
+        self.assertNotIn("章节：", message)
+        self.assertNotIn("更新时间：", message)
+        self.assertNotIn("未知", message)
 
     def test_format_query_failed_hides_raw_exception(self):
         message = format_query_failed("详情")
 
         self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
         self.assertNotIn("Traceback", message)
+
+    def test_admin_failed_formats_napcat_missing_mount_as_diagnosis(self):
+        job = AlbumQueueJob(
+            id=21,
+            album_id="1020215",
+            destination_type="private",
+            group_id=None,
+            user_id=3065532050,
+            status="failed",
+            attempts=1,
+            priority=0,
+            error="ActionFailed(retcode=1200, message=\"ENOENT: no such file or directory, open '/opt/jmbot/data/output/JM1020215.pdf'\")",
+            created_at="2026-06-25T00:00:00.000Z",
+            updated_at="2026-06-25T00:00:00.000Z",
+        )
+
+        message = format_admin_failed_tasks([job])
+
+        self.assertIn("NapCat 无法访问输出文件", message)
+        self.assertIn("检查 /opt/jmbot 挂载", message)
+        self.assertNotIn("ActionFailed", message)
 
     def test_format_queue_summary_reports_empty_queue(self):
         message = format_queue_summary([])
