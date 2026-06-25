@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from jmbot.core.sender import ensure_group_folder, upload_group_pdf, upload_private_pdf
+from jmbot.core.sender import (
+    ensure_group_folder,
+    send_group_image,
+    send_private_image,
+    upload_group_pdf,
+    upload_private_pdf,
+)
 
 
 class FakeBot:
@@ -25,7 +31,7 @@ class FakeBot:
             )
             return None
 
-        if action in {"upload_group_file", "upload_private_file"}:
+        if action in {"upload_group_file", "upload_private_file", "send_group_msg", "send_private_msg"}:
             return None
 
         raise AssertionError(f"Unexpected action: {action}")
@@ -95,6 +101,44 @@ class SenderTest(unittest.IsolatedAsyncioTestCase):
                     "user_id": 2661195769,
                     "file": pdf_path.resolve().as_uri(),
                     "name": "JM1949101.pdf",
+                },
+            ),
+        )
+
+    async def test_send_group_image_uses_image_message_segment(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "cover.jpg"
+            image_path.write_bytes(b"image")
+
+            await send_group_image(bot, 1053512745, image_path)
+
+        self.assertEqual(
+            bot.calls[-1],
+            (
+                "send_group_msg",
+                {
+                    "group_id": 1053512745,
+                    "message": [{"type": "image", "data": {"file": image_path.resolve().as_uri()}}],
+                },
+            ),
+        )
+
+    async def test_send_private_image_uses_image_message_segment(self):
+        bot = FakeBot()
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "cover.jpg"
+            image_path.write_bytes(b"image")
+
+            await send_private_image(bot, 2661195769, image_path)
+
+        self.assertEqual(
+            bot.calls[-1],
+            (
+                "send_private_msg",
+                {
+                    "user_id": 2661195769,
+                    "message": [{"type": "image", "data": {"file": image_path.resolve().as_uri()}}],
                 },
             ),
         )

@@ -17,6 +17,7 @@ class BotConfig:
     output_root: Path
     option_root: Path
     queue_db_path: Path
+    preview_root: Path
     max_concurrency: int
     download_image_threads: int
     download_photo_threads: int
@@ -29,6 +30,8 @@ class BotConfig:
     query_max_concurrency: int
     detail_cache_ttl_seconds: int
     query_cache_max_entries: int
+    preview_page_count: int
+    preview_timeout_seconds: int
     allowed_group_ids: set[int]
     superuser_ids: set[int]
     clean_after_upload: bool
@@ -86,6 +89,7 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         output_root=Path(source.get("JM_BOT_OUTPUT_ROOT", "data/output")),
         option_root=Path(source.get("JM_BOT_OPTION_ROOT", "data/options")),
         queue_db_path=Path(source.get("JM_BOT_QUEUE_DB", "data/queue.sqlite3")),
+        preview_root=Path(source.get("JM_BOT_PREVIEW_ROOT", "data/preview")),
         max_concurrency=parse_positive_int(source, "JM_BOT_MAX_CONCURRENCY", 1),
         download_image_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_IMAGE_THREADS", 10),
         download_photo_threads=parse_positive_int(source, "JM_BOT_DOWNLOAD_PHOTO_THREADS", 2),
@@ -98,6 +102,8 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         query_max_concurrency=parse_positive_int(source, "JM_BOT_QUERY_MAX_CONCURRENCY", 1),
         detail_cache_ttl_seconds=parse_positive_int(source, "JM_BOT_DETAIL_CACHE_TTL_SECONDS", 300),
         query_cache_max_entries=parse_positive_int(source, "JM_BOT_QUERY_CACHE_MAX_ENTRIES", 128),
+        preview_page_count=parse_positive_int(source, "JM_BOT_PREVIEW_PAGE_COUNT", 10),
+        preview_timeout_seconds=parse_positive_int(source, "JM_BOT_PREVIEW_TIMEOUT_SECONDS", 180),
         allowed_group_ids=parse_int_set(source.get("JM_BOT_ALLOWED_GROUPS")),
         superuser_ids=parse_int_set(source.get("JM_BOT_SUPERUSERS")),
         clean_after_upload=parse_bool(source.get("JM_BOT_CLEAN_AFTER_UPLOAD"), True),

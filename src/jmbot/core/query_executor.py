@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TypeVar
 
 from jmbot.core.catalog_service import AlbumDetail, get_album_detail
 from jmbot.core.job_executor import JobTimeoutError, run_with_timeout
+from jmbot.core.preview_service import CoverResult, PreviewResult, build_preview, download_cover
 
 
 T = TypeVar("T")
@@ -30,3 +32,28 @@ def run_query_with_timeout(
 
 def query_album_detail(album_id: str, *, timeout_seconds: float) -> AlbumDetail:
     return run_query_with_timeout(get_album_detail, album_id, timeout_seconds=timeout_seconds)
+
+
+def query_cover(album_id: str, preview_root: str | Path, *, timeout_seconds: float) -> CoverResult:
+    return run_query_with_timeout(
+        download_cover,
+        album_id,
+        preview_root,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def query_preview(
+    album_id: str,
+    preview_root: str | Path,
+    *,
+    page_count: int,
+    timeout_seconds: float,
+) -> PreviewResult:
+    return run_query_with_timeout(
+        build_preview,
+        album_id,
+        preview_root,
+        page_count=page_count,
+        timeout_seconds=timeout_seconds,
+    )

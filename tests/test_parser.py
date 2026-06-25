@@ -96,6 +96,24 @@ class ParseJmCommandTest(unittest.TestCase):
                 self.assertEqual(result.action, "detail")
                 self.assertEqual(result.album_id, "123456")
 
+    def test_parse_cover_commands(self):
+        for message in ["/jm 封面 123456", "/jm cover 123456"]:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "cover")
+                self.assertEqual(result.album_id, "123456")
+
+    def test_parse_preview_commands(self):
+        for message in ["/jm 预览 123456", "/jm preview 123456"]:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "preview")
+                self.assertEqual(result.album_id, "123456")
+
     def test_removed_search_commands_are_not_parsed(self):
         self.assertIsNone(parse_jm_message("/jm 搜索 测试关键词"))
         self.assertIsNone(parse_jm_message("/jm search keyword"))

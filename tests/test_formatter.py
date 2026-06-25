@@ -39,6 +39,8 @@ class FormatterTest(unittest.TestCase):
         message = format_help("/jm")
 
         self.assertIn("/jm 详情 123456", message)
+        self.assertIn("/jm 封面 123456", message)
+        self.assertIn("/jm 预览 123456", message)
         self.assertNotIn("搜索", message)
         self.assertNotIn("/jm 下载 1", message)
         self.assertNotIn("zip", message.lower())

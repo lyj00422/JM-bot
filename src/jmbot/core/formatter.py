@@ -15,6 +15,8 @@ def format_help(command_prefix: str = "/jm") -> str:
             "JMbot 可用命令：",
             f"{prefix} 123456 - 加入下载队列",
             f"{prefix} 详情 123456 - 查看漫画详情",
+            f"{prefix} 封面 123456 - 发送封面图片",
+            f"{prefix} 预览 123456 - 上传前 10 页预览 PDF",
             f"{prefix} 撤回 123456 - 撤回自己的排队任务",
             f"{prefix} 队列 - 查看当前队列",
             f"{prefix} 我的 - 查看自己的当前任务",
