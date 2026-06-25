@@ -1,13 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
-from jmbot.core.catalog_service import get_album_detail, search_albums
+from jmbot.core.catalog_service import get_album_detail
 
 
 class FakeClient:
     def __init__(self):
         self.detail_calls = []
-        self.search_calls = []
 
     def get_album_detail(self, album_id):
         self.detail_calls.append(album_id)
@@ -22,20 +21,6 @@ class FakeClient:
                 ("1002", "2", "第二话"),
             ],
             update_date="2026-06-25",
-        )
-
-    def search_site(self, keyword, page=1):
-        self.search_calls.append((keyword, page))
-        return SimpleNamespace(
-            total=8,
-            content=[
-                ("111111", {"name": "结果一", "tags": ["A", "B"]}),
-                ("222222", {"name": "结果二"}),
-                ("333333", {"name": "结果三", "tags": []}),
-                ("444444", {"name": "结果四", "tags": ["D"]}),
-                ("555555", {"name": "结果五", "tags": ["E"]}),
-                ("666666", {"name": "不应展示", "tags": ["F"]}),
-            ],
         )
 
 
@@ -68,19 +53,20 @@ class CatalogServiceTest(unittest.TestCase):
         self.assertEqual(detail.chapters, ())
         self.assertIsNone(detail.update_time)
 
-    def test_search_albums_returns_only_first_five_items(self):
-        client = FakeClient()
+    def test_get_album_detail_treats_zero_metadata_as_unknown(self):
+        client = SimpleNamespace(
+            get_album_detail=lambda album_id: SimpleNamespace(
+                album_id=album_id,
+                name="标题",
+                page_count=0,
+                update_date="0",
+            )
+        )
 
-        result = search_albums("关键词", page=2, client=client)
+        detail = get_album_detail("123456", client=client)
 
-        self.assertEqual(client.search_calls, [("关键词", 2)])
-        self.assertEqual(result.keyword, "关键词")
-        self.assertEqual(result.page, 2)
-        self.assertEqual(result.total, 8)
-        self.assertEqual(len(result.items), 5)
-        self.assertEqual(result.items[0].album_id, "111111")
-        self.assertEqual(result.items[1].tags, ())
-        self.assertNotIn("666666", [item.album_id for item in result.items])
+        self.assertIsNone(detail.page_count)
+        self.assertIsNone(detail.update_time)
 
 
 if __name__ == "__main__":

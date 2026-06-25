@@ -27,7 +27,6 @@ class BotConfig:
     split_image_count: int
     query_timeout_seconds: int
     query_max_concurrency: int
-    search_cache_ttl_seconds: int
     detail_cache_ttl_seconds: int
     query_cache_max_entries: int
     allowed_group_ids: set[int]
@@ -97,7 +96,6 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         split_image_count=parse_positive_int(source, "JM_BOT_SPLIT_IMAGE_COUNT", 80),
         query_timeout_seconds=parse_positive_int(source, "JM_BOT_QUERY_TIMEOUT_SECONDS", 20),
         query_max_concurrency=parse_positive_int(source, "JM_BOT_QUERY_MAX_CONCURRENCY", 1),
-        search_cache_ttl_seconds=parse_positive_int(source, "JM_BOT_SEARCH_CACHE_TTL_SECONDS", 600),
         detail_cache_ttl_seconds=parse_positive_int(source, "JM_BOT_DETAIL_CACHE_TTL_SECONDS", 300),
         query_cache_max_entries=parse_positive_int(source, "JM_BOT_QUERY_CACHE_MAX_ENTRIES", 128),
         allowed_group_ids=parse_int_set(source.get("JM_BOT_ALLOWED_GROUPS")),

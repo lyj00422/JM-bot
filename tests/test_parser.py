@@ -96,33 +96,10 @@ class ParseJmCommandTest(unittest.TestCase):
                 self.assertEqual(result.action, "detail")
                 self.assertEqual(result.album_id, "123456")
 
-    def test_parse_search_commands(self):
-        cases = [
-            ("/jm 搜索 测试关键词", "测试关键词", 1),
-            ("/jm 搜索 测试 关键词 2", "测试 关键词", 2),
-            ("/jm search keyword", "keyword", 1),
-            ("/jm search two words 3", "two words", 3),
-        ]
-
-        for message, keyword, page in cases:
-            with self.subTest(message=message):
-                result = parse_jm_message(message)
-
-                self.assertIsNotNone(result)
-                self.assertEqual(result.action, "search")
-                self.assertEqual(result.keyword, keyword)
-                self.assertEqual(result.page, page)
-
-    def test_parse_download_from_search_command(self):
-        result = parse_jm_message("/jm 下载 2")
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result.action, "download_from_search")
-        self.assertEqual(result.index, 2)
-
-    def test_parse_rejects_non_positive_search_numbers(self):
-        self.assertIsNone(parse_jm_message("/jm 搜索 keyword 0"))
-        self.assertIsNone(parse_jm_message("/jm 下载 0"))
+    def test_removed_search_commands_are_not_parsed(self):
+        self.assertIsNone(parse_jm_message("/jm 搜索 测试关键词"))
+        self.assertIsNone(parse_jm_message("/jm search keyword"))
+        self.assertIsNone(parse_jm_message("/jm 下载 2"))
 
     def test_parse_admin_commands(self):
         cases = [

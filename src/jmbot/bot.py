@@ -16,15 +16,14 @@ from jmbot.core.command_service import (
     admin_kill_album,
     cancel_album_request,
     enqueue_album_request,
-    enqueue_search_result,
     my_tasks_summary,
     query_album_detail_message,
-    query_search_message,
     queue_summary,
     retry_failed_album,
     task_history,
 )
 from jmbot.core.cleanup import cleanup_album_files
+from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import format_help
 from jmbot.core.jm_service import DownloadSettings
 from jmbot.core.job_executor import run_album_job_with_timeout
@@ -33,7 +32,6 @@ from jmbot.core.parser import JmMessage, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 from jmbot.core.queue_processor import process_next_album_job
 from jmbot.core.recovery import recover_interrupted_jobs
-from jmbot.core.search_cache import DetailCache, SearchCache, SearchScope
 from jmbot.core.sender import upload_group_pdf, upload_private_pdf
 
 
@@ -49,10 +47,6 @@ DOWNLOAD_SETTINGS = DownloadSettings(
     split_image_count=CONFIG.split_image_count,
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
-SEARCH_CACHE = SearchCache(
-    ttl_seconds=CONFIG.search_cache_ttl_seconds,
-    max_entries=CONFIG.query_cache_max_entries,
-)
 DETAIL_CACHE = DetailCache(
     ttl_seconds=CONFIG.detail_cache_ttl_seconds,
     max_entries=CONFIG.query_cache_max_entries,
@@ -151,39 +145,6 @@ async def _handle_parsed_command(
         )
         await jm_matcher.send(message)
         return False
-
-    if command.action == "search":
-        if command.keyword is None or command.page is None:
-            return False
-        message = await query_search_message(
-            command.keyword,
-            command.page,
-            SearchScope(
-                target.destination_type,
-                user_id=target.user_id,
-                group_id=target.group_id,
-            ),
-            SEARCH_CACHE,
-            QUERY_SEMAPHORE,
-            timeout_seconds=CONFIG.query_timeout_seconds,
-            command_prefix=CONFIG.command_prefix,
-        )
-        await jm_matcher.send(message)
-        return False
-
-    if command.action == "download_from_search":
-        if command.index is None:
-            return False
-        await jm_matcher.send(
-            enqueue_search_result(
-                ALBUM_QUEUE,
-                SEARCH_CACHE,
-                command.index,
-                target,
-                command_prefix=CONFIG.command_prefix,
-            )
-        )
-        return True
 
     if command.action == "my_tasks":
         await jm_matcher.send(my_tasks_summary(ALBUM_QUEUE, target))
