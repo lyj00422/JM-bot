@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,11 +11,16 @@ from jmbot.core.command_service import (
     admin_kill_album,
     cancel_album_request,
     enqueue_album_request,
+    enqueue_search_result,
+    query_album_detail_message,
+    query_search_message,
     my_tasks_summary,
     retry_failed_album,
     task_history,
 )
+from jmbot.core.catalog_service import AlbumDetail, AlbumSummary, SearchResultPage
 from jmbot.core.persistent_queue import PersistentAlbumQueue
+from jmbot.core.search_cache import DetailCache, SearchCache, SearchScope
 
 
 class CommandServiceTest(unittest.TestCase):
@@ -147,6 +153,96 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("最近失败任务", message)
         self.assertIn("JM111111", message)
         self.assertNotIn("JM222222", message)
+
+    def test_enqueue_search_result_reuses_normal_queue_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            cache = SearchCache()
+            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
+            cache.put(
+                SearchScope("group", user_id=42, group_id=10001),
+                SearchResultPage("关键词", 1, 1, (AlbumSummary("111111", "结果"),)),
+            )
+
+            message = enqueue_search_result(queue, cache, 1, target)
+            jobs = queue.list_active_for_user(destination_type="group", group_id=10001, user_id=42)
+
+        self.assertIn("JM111111", message)
+        self.assertEqual([job.album_id for job in jobs], ["111111"])
+
+    def test_enqueue_search_result_reports_missing_and_invalid_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            cache = SearchCache()
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+
+            missing = enqueue_search_result(queue, cache, 1, target)
+            cache.put(
+                SearchScope("private", user_id=42),
+                SearchResultPage("关键词", 1, 1, (AlbumSummary("111111", "结果"),)),
+            )
+            invalid = enqueue_search_result(queue, cache, 2, target)
+
+        self.assertIn("先使用 /jm 搜索", missing)
+        self.assertIn("序号不存在", invalid)
+
+
+class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_detail_query_uses_cache_after_first_call(self):
+        cache = DetailCache()
+        semaphore = asyncio.Semaphore(1)
+        calls = []
+
+        def query(album_id, *, timeout_seconds):
+            calls.append((album_id, timeout_seconds))
+            return AlbumDetail(album_id, "标题", (), 10, (), (), None)
+
+        first = await query_album_detail_message(
+            "123456", cache, semaphore, timeout_seconds=20, query_func=query
+        )
+        second = await query_album_detail_message(
+            "123456", cache, semaphore, timeout_seconds=20, query_func=query
+        )
+
+        self.assertIn("标题：标题", first)
+        self.assertEqual(second, first)
+        self.assertEqual(calls, [("123456", 20)])
+
+    async def test_search_query_stores_current_context_results(self):
+        cache = SearchCache()
+        semaphore = asyncio.Semaphore(1)
+        scope = SearchScope("private", user_id=42)
+
+        def query(keyword, page, *, timeout_seconds):
+            return SearchResultPage(keyword, page, 1, (AlbumSummary("111111", "结果"),))
+
+        message = await query_search_message(
+            "关键词",
+            2,
+            scope,
+            cache,
+            semaphore,
+            timeout_seconds=20,
+            query_func=query,
+        )
+
+        self.assertIn("第 2 页", message)
+        self.assertEqual(cache.resolve_album_id(scope, 1), "111111")
+
+    async def test_query_failure_returns_safe_message(self):
+        def query(album_id, *, timeout_seconds):
+            raise RuntimeError("secret upstream failure")
+
+        message = await query_album_detail_message(
+            "123456",
+            DetailCache(),
+            asyncio.Semaphore(1),
+            timeout_seconds=20,
+            query_func=query,
+        )
+
+        self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
+        self.assertNotIn("secret", message)
 
 
 if __name__ == "__main__":

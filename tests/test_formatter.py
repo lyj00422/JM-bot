@@ -1,6 +1,15 @@
 import unittest
 
-from jmbot.core.formatter import format_help, format_queue_summary, format_task_failed, format_task_history
+from jmbot.core.catalog_service import AlbumDetail, AlbumSummary, SearchResultPage
+from jmbot.core.formatter import (
+    format_album_detail,
+    format_help,
+    format_query_failed,
+    format_queue_summary,
+    format_search_results,
+    format_task_failed,
+    format_task_history,
+)
 from jmbot.core.persistent_queue import AlbumQueueJob
 
 
@@ -26,12 +35,61 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 管理 插队 123456", message)
         self.assertIn("/jm 管理 失败", message)
 
-    def test_format_help_does_not_advertise_future_features(self):
+    def test_format_help_lists_catalog_commands_but_not_other_future_features(self):
         message = format_help("/jm")
 
-        self.assertNotIn("搜索", message)
-        self.assertNotIn("详情", message)
+        self.assertIn("/jm 搜索 关键词", message)
+        self.assertIn("/jm 详情 123456", message)
+        self.assertIn("/jm 下载 1", message)
         self.assertNotIn("zip", message.lower())
+
+    def test_format_album_detail_limits_tags_and_chapters(self):
+        detail = AlbumDetail(
+            album_id="123456",
+            title="测试漫画",
+            authors=("作者甲", "作者乙"),
+            page_count=120,
+            tags=tuple(f"标签{i}" for i in range(12)),
+            chapters=tuple(f"第{i}话" for i in range(12)),
+            update_time="2026-06-25",
+        )
+
+        message = format_album_detail(detail)
+
+        self.assertIn("JM123456", message)
+        self.assertIn("标题：测试漫画", message)
+        self.assertIn("作者：作者甲 / 作者乙", message)
+        self.assertIn("页数：120", message)
+        self.assertIn("标签9", message)
+        self.assertNotIn("标签10", message)
+        self.assertIn("第9话", message)
+        self.assertNotIn("第10话", message)
+        self.assertIn("/jm 123456", message)
+
+    def test_format_search_results_lists_five_items_and_next_actions(self):
+        result = SearchResultPage(
+            keyword="关键词",
+            page=2,
+            total=20,
+            items=tuple(
+                AlbumSummary(str(100000 + index), f"标题{index}", (f"标签{index}",))
+                for index in range(1, 6)
+            ),
+        )
+
+        message = format_search_results(result)
+
+        self.assertIn("搜索：关键词（第 2 页）", message)
+        self.assertIn("1. JM100001 标题1", message)
+        self.assertIn("5. JM100005 标题5", message)
+        self.assertIn("/jm 下载 1", message)
+        self.assertIn("/jm 看 100001", message)
+
+    def test_format_query_failed_hides_raw_exception(self):
+        message = format_query_failed("详情")
+
+        self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
+        self.assertNotIn("Traceback", message)
 
     def test_format_queue_summary_reports_empty_queue(self):
         message = format_queue_summary([])

@@ -45,6 +45,10 @@ git pull origin release/aliyun-2c2g
 
 ```text
 /jm 123456
+/jm 详情 123456
+/jm 搜索 关键词
+/jm 搜索 关键词 2
+/jm 下载 1
 /jm 撤回 123456
 /jm 队列
 /jm 我的
@@ -56,6 +60,7 @@ git pull origin release/aliyun-2c2g
 
 `/jm help` 是 `/jm 帮助` 的英文别名。
 `/jm my` 是 `/jm 我的` 的英文别名，`/jm history` 是 `/jm 历史` 的英文别名。
+`/jm 看 <id>` 和 `/jm info <id>` 是详情命令别名，`/jm search <关键词> [页码]` 是搜索命令别名。
 
 管理员命令需要发送者 QQ 在 `JM_BOT_SUPERUSERS` 中：
 
@@ -70,6 +75,9 @@ git pull origin release/aliyun-2c2g
 说明：
 
 - `/jm 撤回 <id>` 只能撤回自己在当前群或当前私聊里提交、且仍处于排队中的任务；已经开始处理的任务需要管理员 `kill`。
+- `/jm 搜索 <关键词> [页码]` 每页展示最多 5 条结果；最近一次结果按用户和当前群/私聊隔离缓存。
+- `/jm 下载 <序号>` 从当前上下文最近一次仍有效的搜索结果中取漫画 ID，并复用普通下载队列。
+- 详情和搜索在独立子进程中执行，查询超时会被强制终止，不会长期占住 Bot 事件循环。
 - `/jm 我的` 只显示自己在当前群或当前私聊里的排队中、处理中任务。
 - `/jm 历史` 只显示自己在当前群或当前私聊里的最近完成、失败、取消任务。
 - `/jm 历史 失败` 只显示自己的最近失败任务。
@@ -148,9 +156,14 @@ JM_BOT_JMCOMIC_RETRY_TIMES=5
 JM_BOT_JOB_TIMEOUT_SECONDS=1800
 JM_BOT_AUTO_SPLIT_PDF=true
 JM_BOT_SPLIT_IMAGE_COUNT=80
+JM_BOT_QUERY_TIMEOUT_SECONDS=20
+JM_BOT_QUERY_MAX_CONCURRENCY=1
+JM_BOT_SEARCH_CACHE_TTL_SECONDS=600
+JM_BOT_DETAIL_CACHE_TTL_SECONDS=300
+JM_BOT_QUERY_CACHE_MAX_ENTRIES=128
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成 `JM<id>.part1.pdf`、`JM<id>.part2.pdf` 等多个 PDF 并顺序上传，不在低配服务器上默认合并成单个大 PDF。小内存服务器优先降低线程数，并保留任务超时保护。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成 `JM<id>.part1.pdf`、`JM<id>.part2.pdf` 等多个 PDF 并顺序上传。查询同样使用隔离子进程；`JM_BOT_QUERY_TIMEOUT_SECONDS` 是单次详情/搜索硬超时，`JM_BOT_QUERY_MAX_CONCURRENCY` 控制同时查询数，其余查询配置控制内存缓存时效和容量。
 
 ## 服务器部署
 
@@ -329,10 +342,15 @@ JM_BOT_JMCOMIC_RETRY_TIMES=3
 JM_BOT_JOB_TIMEOUT_SECONDS=1800
 JM_BOT_AUTO_SPLIT_PDF=true
 JM_BOT_SPLIT_IMAGE_COUNT=80
+JM_BOT_QUERY_TIMEOUT_SECONDS=20
+JM_BOT_QUERY_MAX_CONCURRENCY=1
+JM_BOT_SEARCH_CACHE_TTL_SECONDS=600
+JM_BOT_DETAIL_CACHE_TTL_SECONDS=300
+JM_BOT_QUERY_CACHE_MAX_ENTRIES=128
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
-这些设置会牺牲一些下载速度，换取更低的 CPU、内存和磁盘压力。PDF 生成会优先使用 `img2pdf` 以减少整本图片一次性解码带来的内存压力；当图片数量超过 `JM_BOT_SPLIT_IMAGE_COUNT` 时，会生成多个分卷 PDF 并依次上传，避免 2 GiB 服务器为了单个超大 PDF 承受过高内存和磁盘 I/O 压力。如果转换失败，会回退到 Pillow。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
+这些设置会牺牲一些下载和查询速度，换取更低的 CPU、内存和磁盘压力。详情和搜索默认只允许一个外部查询并发，20 秒后强制终止异常查询，并用短时内存缓存减少重复请求。PDF 生成会优先使用 `img2pdf`；图片过多时生成多个分卷 PDF 并依次上传。如果转换失败，会回退到 Pillow。`deploy/jmbot.service.example` 也包含 `MemoryMax=1536M`、`MemoryHigh=1280M` 和 `CPUQuota=180%`，用于防止单个服务把 2 GiB 小机器拖垮。
 
 ## 运行时文件
 

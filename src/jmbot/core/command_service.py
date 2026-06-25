@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from jmbot.core.catalog_service import AlbumDetail, SearchResultPage
 from jmbot.core.formatter import (
+    format_album_detail,
     format_admin_failed_tasks,
     format_my_tasks,
+    format_query_failed,
     format_queue_summary,
     format_retry_duplicate,
     format_retry_enqueued,
     format_retry_missing,
+    format_search_results,
     format_task_history,
 )
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
+from jmbot.core.query_executor import query_album_detail, query_search
+from jmbot.core.search_cache import DetailCache, SearchCache, SearchCacheMissError, SearchIndexError, SearchScope
+
+
+LOGGER = logging.getLogger(__name__)
+DetailQuery = Callable[..., AlbumDetail]
+SearchQuery = Callable[..., SearchResultPage]
 
 
 @dataclass(frozen=True)
@@ -34,6 +48,81 @@ def enqueue_album_request(queue: PersistentAlbumQueue, album_id: str, target: Qu
 
     ahead_count = queue.count_ahead(job.id)
     return f"收到 JM{album_id}，已加入队列，前面还有{ahead_count}篇漫画正在处理。"
+
+
+def enqueue_search_result(
+    queue: PersistentAlbumQueue,
+    cache: SearchCache,
+    index: int,
+    target: QueueTarget,
+    *,
+    command_prefix: str = "/jm",
+) -> str:
+    """Resolve a displayed search item and reuse the normal enqueue flow."""
+
+    scope = SearchScope(target.destination_type, user_id=target.user_id, group_id=target.group_id)
+    try:
+        album_id = cache.resolve_album_id(scope, index)
+    except SearchCacheMissError:
+        return f"没有可用的搜索结果，请先使用 {command_prefix} 搜索 <关键词>。"
+    except SearchIndexError:
+        return "这个搜索结果序号不存在，请按当前列表中的序号选择。"
+    return enqueue_album_request(queue, album_id, target)
+
+
+async def query_album_detail_message(
+    album_id: str,
+    cache: DetailCache,
+    semaphore: asyncio.Semaphore,
+    *,
+    timeout_seconds: int,
+    command_prefix: str = "/jm",
+    query_func: DetailQuery = query_album_detail,
+) -> str:
+    """Fetch and format album details without blocking the event loop."""
+
+    cached = cache.get(album_id)
+    if cached is not None:
+        return format_album_detail(cached, command_prefix)
+
+    try:
+        async with semaphore:
+            detail = await asyncio.to_thread(query_func, album_id, timeout_seconds=timeout_seconds)
+    except Exception:
+        LOGGER.exception("Album detail query failed for JM%s", album_id)
+        return format_query_failed("详情")
+
+    cache.put(detail)
+    return format_album_detail(detail, command_prefix)
+
+
+async def query_search_message(
+    keyword: str,
+    page: int,
+    scope: SearchScope,
+    cache: SearchCache,
+    semaphore: asyncio.Semaphore,
+    *,
+    timeout_seconds: int,
+    command_prefix: str = "/jm",
+    query_func: SearchQuery = query_search,
+) -> str:
+    """Fetch, cache, and format one search page."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                keyword,
+                page,
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        LOGGER.exception("Album search failed for keyword %r page %s", keyword, page)
+        return format_query_failed("搜索")
+
+    cache.put(scope, result)
+    return format_search_results(result, command_prefix)
 
 
 def cancel_album_request(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget) -> str:
