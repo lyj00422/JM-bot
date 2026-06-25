@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+import shutil
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from jmbot.core.catalog_service import AlbumDetail
 from jmbot.core.detail_cache import DetailCache
@@ -19,11 +21,15 @@ from jmbot.core.formatter import (
     format_task_history,
 )
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
-from jmbot.core.query_executor import query_album_detail
+from jmbot.core.preview_service import CoverResult, PreviewResult
+from jmbot.core.query_executor import query_album_detail, query_cover, query_preview
 
 
 LOGGER = logging.getLogger(__name__)
 DetailQuery = Callable[..., AlbumDetail]
+CoverQuery = Callable[..., CoverResult]
+PreviewQuery = Callable[..., PreviewResult]
+MediaDeliverer = Callable[[Path], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,64 @@ async def query_album_detail_message(
 
     cache.put(detail)
     return format_album_detail(detail, command_prefix)
+
+
+async def deliver_cover(
+    album_id: str,
+    preview_root: Path,
+    semaphore: asyncio.Semaphore,
+    *,
+    deliver: MediaDeliverer,
+    timeout_seconds: int,
+    query_func: CoverQuery = query_cover,
+) -> str | None:
+    """Fetch, send, and clean one cover image."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                album_id,
+                preview_root,
+                timeout_seconds=timeout_seconds,
+            )
+            await deliver(result.cover_path)
+            await asyncio.to_thread(shutil.rmtree, result.media_dir, True)
+        return None
+    except Exception:
+        LOGGER.exception("Cover delivery failed for JM%s", album_id)
+        return f"JM{album_id} 封面获取失败，请稍后重试。"
+
+
+async def deliver_preview(
+    album_id: str,
+    preview_root: Path,
+    semaphore: asyncio.Semaphore,
+    *,
+    deliver: MediaDeliverer,
+    page_count: int,
+    timeout_seconds: int,
+    query_func: PreviewQuery = query_preview,
+) -> str:
+    """Build, upload, and clean one preview PDF."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                album_id,
+                preview_root,
+                page_count=page_count,
+                timeout_seconds=timeout_seconds,
+            )
+            await deliver(result.pdf_path)
+            await asyncio.to_thread(shutil.rmtree, result.media_dir, True)
+        return f"JM{album_id} 预览已上传。"
+    except Exception:
+        LOGGER.exception("Preview delivery failed for JM%s", album_id)
+        return f"JM{album_id} 预览生成失败，请稍后重试。"
+
+
 def cancel_album_request(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget) -> str:
     """Cancel a normal user's own pending request."""
 

@@ -11,6 +11,8 @@ from jmbot.core.command_service import (
     admin_kill_album,
     cancel_album_request,
     enqueue_album_request,
+    deliver_cover,
+    deliver_preview,
     query_album_detail_message,
     my_tasks_summary,
     retry_failed_album,
@@ -18,6 +20,7 @@ from jmbot.core.command_service import (
 )
 from jmbot.core.catalog_service import AlbumDetail
 from jmbot.core.detail_cache import DetailCache
+from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.persistent_queue import PersistentAlbumQueue
 
 
@@ -186,6 +189,87 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
+        self.assertNotIn("secret", message)
+
+    async def test_deliver_cover_sends_image_and_cleans_media_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_dir = Path(tmp) / "271673"
+            media_dir.mkdir()
+            cover_path = media_dir / "cover.jpg"
+            cover_path.write_bytes(b"cover")
+            delivered = []
+
+            def query(album_id, preview_root, *, timeout_seconds):
+                return CoverResult(album_id, media_dir, cover_path)
+
+            async def deliver(path):
+                self.assertTrue(semaphore.locked())
+                delivered.append(path)
+
+            semaphore = asyncio.Semaphore(1)
+            message = await deliver_cover(
+                "271673",
+                Path(tmp),
+                semaphore,
+                deliver=deliver,
+                timeout_seconds=20,
+                query_func=query,
+            )
+
+            self.assertIsNone(message)
+            self.assertEqual(delivered, [cover_path])
+            self.assertFalse(media_dir.exists())
+
+    async def test_deliver_preview_uploads_pdf_and_cleans_media_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media_dir = Path(tmp) / "271673"
+            media_dir.mkdir()
+            page_path = media_dir / "page-001.jpg"
+            pdf_path = media_dir / "JM271673（预览）.pdf"
+            page_path.write_bytes(b"page")
+            pdf_path.write_bytes(b"pdf")
+            delivered = []
+
+            def query(album_id, preview_root, *, page_count, timeout_seconds):
+                return PreviewResult(album_id, media_dir, (page_path,), pdf_path)
+
+            async def deliver(path):
+                self.assertTrue(semaphore.locked())
+                delivered.append(path)
+
+            semaphore = asyncio.Semaphore(1)
+            message = await deliver_preview(
+                "271673",
+                Path(tmp),
+                semaphore,
+                deliver=deliver,
+                page_count=10,
+                timeout_seconds=20,
+                query_func=query,
+            )
+
+            self.assertEqual(message, "JM271673 预览已上传。")
+            self.assertEqual(delivered, [pdf_path])
+            self.assertFalse(media_dir.exists())
+
+    async def test_deliver_preview_returns_safe_error(self):
+        def query(album_id, preview_root, *, page_count, timeout_seconds):
+            raise RuntimeError("secret upstream failure")
+
+        async def deliver(path):
+            raise AssertionError("delivery should not run")
+
+        message = await deliver_preview(
+            "271673",
+            Path("preview"),
+            asyncio.Semaphore(1),
+            deliver=deliver,
+            page_count=10,
+            timeout_seconds=20,
+            query_func=query,
+        )
+
+        self.assertEqual(message, "JM271673 预览生成失败，请稍后重试。")
         self.assertNotIn("secret", message)
 
 

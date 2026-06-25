@@ -15,6 +15,8 @@ from jmbot.core.command_service import (
     admin_jump_album,
     admin_kill_album,
     cancel_album_request,
+    deliver_cover,
+    deliver_preview,
     enqueue_album_request,
     my_tasks_summary,
     query_album_detail_message,
@@ -32,7 +34,12 @@ from jmbot.core.parser import JmMessage, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 from jmbot.core.queue_processor import process_next_album_job
 from jmbot.core.recovery import recover_interrupted_jobs
-from jmbot.core.sender import upload_group_pdf, upload_private_pdf
+from jmbot.core.sender import (
+    send_group_image,
+    send_private_image,
+    upload_group_pdf,
+    upload_private_pdf,
+)
 
 
 CONFIG = load_config()
@@ -144,6 +151,43 @@ async def _handle_parsed_command(
             command_prefix=CONFIG.command_prefix,
         )
         await jm_matcher.send(message)
+        cover_error = await deliver_cover(
+            command.album_id,
+            CONFIG.preview_root,
+            QUERY_SEMAPHORE,
+            deliver=lambda path: _send_cover(bot, target, path),
+            timeout_seconds=CONFIG.query_timeout_seconds,
+        )
+        if cover_error is not None:
+            await jm_matcher.send(cover_error)
+        return False
+
+    if command.action == "cover":
+        if command.album_id is None:
+            return False
+        error = await deliver_cover(
+            command.album_id,
+            CONFIG.preview_root,
+            QUERY_SEMAPHORE,
+            deliver=lambda path: _send_cover(bot, target, path),
+            timeout_seconds=CONFIG.query_timeout_seconds,
+        )
+        if error is not None:
+            await jm_matcher.send(error)
+        return False
+
+    if command.action == "preview":
+        if command.album_id is None:
+            return False
+        message = await deliver_preview(
+            command.album_id,
+            CONFIG.preview_root,
+            QUERY_SEMAPHORE,
+            deliver=lambda path: _upload_preview(bot, target, path),
+            page_count=CONFIG.preview_page_count,
+            timeout_seconds=CONFIG.preview_timeout_seconds,
+        )
+        await jm_matcher.send(message)
         return False
 
     if command.action == "my_tasks":
@@ -200,6 +244,24 @@ def _target_from_event(event: MessageEvent) -> QueueTarget | None:
     if isinstance(event, PrivateMessageEvent):
         return QueueTarget(destination_type="private", group_id=None, user_id=event.user_id)
     return None
+
+
+async def _send_cover(bot: Bot, target: QueueTarget, path) -> None:
+    if target.destination_type == "group":
+        if target.group_id is None:
+            raise ValueError("group_id is required for group cover")
+        await send_group_image(bot, target.group_id, path)
+    else:
+        await send_private_image(bot, target.user_id, path)
+
+
+async def _upload_preview(bot: Bot, target: QueueTarget, path) -> None:
+    if target.destination_type == "group":
+        if target.group_id is None:
+            raise ValueError("group_id is required for group preview")
+        await upload_group_pdf(bot, target.group_id, path, CONFIG.group_folder_name)
+    else:
+        await upload_private_pdf(bot, target.user_id, path)
 
 
 async def _ensure_queue_worker(bot: Bot) -> None:

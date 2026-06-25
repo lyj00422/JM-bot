@@ -18,6 +18,8 @@ JmAction = Literal[
     "queue",
     "help",
     "detail",
+    "cover",
+    "preview",
     "my_tasks",
     "history",
     "retry",
@@ -71,6 +73,14 @@ def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | N
     detail_match = re.match(rf"^\s*{prefix}\s+(?:看|详情|info)\s+([0-9]+)\s*$", message, re.IGNORECASE)
     if detail_match is not None:
         return JmMessage(action="detail", album_id=detail_match.group(1))
+
+    cover_match = re.match(rf"^\s*{prefix}\s+(?:封面|cover)\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if cover_match is not None:
+        return JmMessage(action="cover", album_id=cover_match.group(1))
+
+    preview_match = re.match(rf"^\s*{prefix}\s+(?:预览|preview)\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if preview_match is not None:
+        return JmMessage(action="preview", album_id=preview_match.group(1))
 
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")

@@ -21,6 +21,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_OUTPUT_ROOT": "output",
                 "JM_BOT_OPTION_ROOT": "options",
                 "JM_BOT_QUEUE_DB": "queue/jobs.sqlite3",
+                "JM_BOT_PREVIEW_ROOT": "preview",
                 "JM_BOT_MAX_CONCURRENCY": "3",
                 "JM_BOT_DOWNLOAD_IMAGE_THREADS": "3",
                 "JM_BOT_DOWNLOAD_PHOTO_THREADS": "1",
@@ -33,6 +34,8 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_QUERY_MAX_CONCURRENCY": "2",
                 "JM_BOT_DETAIL_CACHE_TTL_SECONDS": "200",
                 "JM_BOT_QUERY_CACHE_MAX_ENTRIES": "64",
+                "JM_BOT_PREVIEW_PAGE_COUNT": "8",
+                "JM_BOT_PREVIEW_TIMEOUT_SECONDS": "120",
                 "JM_BOT_ALLOWED_GROUPS": "10001,10002",
                 "JM_BOT_SUPERUSERS": "42",
                 "JM_BOT_CLEAN_AFTER_UPLOAD": "false",
@@ -46,6 +49,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.output_root, Path("output"))
         self.assertEqual(config.option_root, Path("options"))
         self.assertEqual(config.queue_db_path, Path("queue/jobs.sqlite3"))
+        self.assertEqual(config.preview_root, Path("preview"))
         self.assertEqual(config.max_concurrency, 3)
         self.assertEqual(config.download_image_threads, 3)
         self.assertEqual(config.download_photo_threads, 1)
@@ -58,6 +62,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.query_max_concurrency, 2)
         self.assertEqual(config.detail_cache_ttl_seconds, 200)
         self.assertEqual(config.query_cache_max_entries, 64)
+        self.assertEqual(config.preview_page_count, 8)
+        self.assertEqual(config.preview_timeout_seconds, 120)
         self.assertEqual(config.allowed_group_ids, {10001, 10002})
         self.assertEqual(config.superuser_ids, {42})
         self.assertFalse(config.clean_after_upload)
@@ -81,6 +87,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.query_max_concurrency, 1)
         self.assertEqual(config.detail_cache_ttl_seconds, 300)
         self.assertEqual(config.query_cache_max_entries, 128)
+        self.assertEqual(config.preview_root, Path("data/preview"))
+        self.assertEqual(config.preview_page_count, 10)
+        self.assertEqual(config.preview_timeout_seconds, 180)
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [
@@ -93,6 +102,8 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_QUERY_MAX_CONCURRENCY": "0"},
             {"JM_BOT_DETAIL_CACHE_TTL_SECONDS": "0"},
             {"JM_BOT_QUERY_CACHE_MAX_ENTRIES": "0"},
+            {"JM_BOT_PREVIEW_PAGE_COUNT": "0"},
+            {"JM_BOT_PREVIEW_TIMEOUT_SECONDS": "0"},
         ]
 
         for env in invalid_cases:

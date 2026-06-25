@@ -57,6 +57,28 @@ async def upload_private_pdf(bot: ApiBot, user_id: int, file_path: str | Path) -
     )
 
 
+async def send_group_image(bot: ApiBot, group_id: int, file_path: str | Path) -> None:
+    """Send a local image directly into a QQ group message."""
+
+    path = _require_file(file_path)
+    await bot.call_api(
+        "send_group_msg",
+        group_id=group_id,
+        message=[{"type": "image", "data": {"file": path.resolve().as_uri()}}],
+    )
+
+
+async def send_private_image(bot: ApiBot, user_id: int, file_path: str | Path) -> None:
+    """Send a local image directly into a QQ private message."""
+
+    path = _require_file(file_path)
+    await bot.call_api(
+        "send_private_msg",
+        user_id=user_id,
+        message=[{"type": "image", "data": {"file": path.resolve().as_uri()}}],
+    )
+
+
 async def _find_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> str | None:
     """Find a QQ group file folder by name from the root folder list."""
 
@@ -73,3 +95,10 @@ async def _find_group_folder(bot: ApiBot, group_id: int, folder_name: str) -> st
             return str(folder_id)
 
     return None
+
+
+def _require_file(file_path: str | Path) -> Path:
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"File does not exist: {path}")
+    return path

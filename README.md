@@ -46,6 +46,8 @@ git pull origin release/aliyun-2c2g
 ```text
 /jm 123456
 /jm 详情 123456
+/jm 封面 123456
+/jm 预览 123456
 /jm 撤回 123456
 /jm 队列
 /jm 我的
@@ -57,7 +59,7 @@ git pull origin release/aliyun-2c2g
 
 `/jm help` 是 `/jm 帮助` 的英文别名。
 `/jm my` 是 `/jm 我的` 的英文别名，`/jm history` 是 `/jm 历史` 的英文别名。
-`/jm 看 <id>` 和 `/jm info <id>` 是详情命令别名。
+`/jm 看 <id>` 和 `/jm info <id>` 是详情命令别名。`/jm cover <id>` 和 `/jm preview <id>` 是封面、预览的英文别名。
 
 管理员命令需要发送者 QQ 在 `JM_BOT_SUPERUSERS` 中：
 
@@ -73,6 +75,10 @@ git pull origin release/aliyun-2c2g
 
 - `/jm 撤回 <id>` 只能撤回自己在当前群或当前私聊里提交、且仍处于排队中的任务；已经开始处理的任务需要管理员 `kill`。
 - 详情查询在独立子进程中执行，查询超时会被强制终止，不会长期占住 Bot 事件循环。
+- `/jm 封面 <id>` 直接在当前群或私聊发送封面图片，不上传到群文件。
+- `/jm 详情 <id>` 返回详情文字后会自动附带封面；封面失败不影响详情文字。
+- `/jm 预览 <id>` 下载第一章正文前 10 页，不包含封面，生成 `JM<id>（预览）.pdf`。
+- 群聊预览上传到现有 `JM` 群文件夹；私聊预览作为私聊文件发送。成功后清理临时图片和预览 PDF。
 - `/jm 我的` 只显示自己在当前群或当前私聊里的排队中、处理中任务。
 - `/jm 历史` 只显示自己在当前群或当前私聊里的最近完成、失败、取消任务。
 - `/jm 历史 失败` 只显示自己的最近失败任务。
@@ -155,9 +161,12 @@ JM_BOT_QUERY_TIMEOUT_SECONDS=20
 JM_BOT_QUERY_MAX_CONCURRENCY=1
 JM_BOT_DETAIL_CACHE_TTL_SECONDS=300
 JM_BOT_QUERY_CACHE_MAX_ENTRIES=128
+JM_BOT_PREVIEW_ROOT=data/preview
+JM_BOT_PREVIEW_PAGE_COUNT=10
+JM_BOT_PREVIEW_TIMEOUT_SECONDS=180
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成 `JM<id>.part1.pdf`、`JM<id>.part2.pdf` 等多个 PDF 并顺序上传。详情查询同样使用隔离子进程；`JM_BOT_QUERY_TIMEOUT_SECONDS` 是单次详情查询硬超时，`JM_BOT_QUERY_MAX_CONCURRENCY` 控制同时查询数，其余查询配置控制详情缓存时效和容量。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
 
 ## 服务器部署
 
@@ -340,6 +349,9 @@ JM_BOT_QUERY_TIMEOUT_SECONDS=20
 JM_BOT_QUERY_MAX_CONCURRENCY=1
 JM_BOT_DETAIL_CACHE_TTL_SECONDS=300
 JM_BOT_QUERY_CACHE_MAX_ENTRIES=128
+JM_BOT_PREVIEW_ROOT=data/preview
+JM_BOT_PREVIEW_PAGE_COUNT=10
+JM_BOT_PREVIEW_TIMEOUT_SECONDS=180
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
