@@ -18,6 +18,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_HOST": "127.0.0.1",
                 "JM_BOT_PORT": "9090",
                 "JM_BOT_DOWNLOAD_ROOT": "downloads",
+                "JM_BOT_ADMIN_COMMAND_PREFIX": "/adminjm",
                 "JM_BOT_OUTPUT_ROOT": "output",
                 "JM_BOT_OPTION_ROOT": "options",
                 "JM_BOT_QUEUE_DB": "queue/jobs.sqlite3",
@@ -44,11 +45,14 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_SUPERUSERS": "42",
                 "JM_BOT_CLEAN_AFTER_UPLOAD": "false",
                 "JM_BOT_GROUP_FOLDER": "Archive",
+                "JM_BOT_HISTORY_RETENTION_DAYS": "14",
+                "JM_BOT_HISTORY_MAX_PER_USER": "30",
             }
         )
 
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 9090)
+        self.assertEqual(config.admin_command_prefix, "/adminjm")
         self.assertEqual(config.download_root, Path("downloads"))
         self.assertEqual(config.output_root, Path("output"))
         self.assertEqual(config.option_root, Path("options"))
@@ -76,6 +80,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.superuser_ids, {42})
         self.assertFalse(config.clean_after_upload)
         self.assertEqual(config.group_folder_name, "Archive")
+        self.assertEqual(config.history_retention_days, 14)
+        self.assertEqual(config.history_max_per_user, 30)
 
     def test_load_config_cleans_after_upload_by_default(self):
         self.assertTrue(load_config({}).clean_after_upload)
@@ -102,6 +108,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.default_format, "pdf")
         self.assertEqual(config.allowed_formats, {"pdf", "zip"})
         self.assertEqual(config.progress_mode, "precise")
+        self.assertEqual(config.admin_command_prefix, "/jmg")
+        self.assertEqual(config.history_retention_days, 7)
+        self.assertEqual(config.history_max_per_user, 50)
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [
@@ -119,6 +128,8 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_DEFAULT_FORMAT": "rar"},
             {"JM_BOT_ALLOWED_FORMATS": "pdf,rar"},
             {"JM_BOT_PROGRESS_MODE": "verbose"},
+            {"JM_BOT_HISTORY_RETENTION_DAYS": "0"},
+            {"JM_BOT_HISTORY_MAX_PER_USER": "0"},
         ]
 
         for env in invalid_cases:

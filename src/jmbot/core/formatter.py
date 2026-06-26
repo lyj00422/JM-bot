@@ -4,13 +4,14 @@ from collections.abc import Sequence
 
 from jmbot.core.catalog_service import AlbumDetail, SearchResult
 from jmbot.core.persistent_queue import AlbumQueueJob
-from jmbot.core.user_store import FavoriteItem, FriendRequestRecord
+from jmbot.core.user_store import FavoriteItem
 
 
-def format_help(command_prefix: str = "/jm") -> str:
+def format_help(command_prefix: str = "/jm", admin_command_prefix: str = "/jmg") -> str:
     """Return compact help for commands implemented today."""
 
     prefix = command_prefix
+    admin_prefix = admin_command_prefix
     return "\n".join(
         [
             "JMbot 可用命令：",
@@ -25,22 +26,23 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 123456 zip - 下载 ZIP",
             f"{prefix} 123456 章节 1,3-5 - 下载指定章节",
             f"{prefix} 进度 123456 - 查看任务进度",
+            f"{prefix} 进度 - 查看最近活动任务进度",
             f"{prefix} 撤回 123456 - 撤回自己的排队任务",
             f"{prefix} 队列 - 查看当前队列",
             f"{prefix} 我的 - 查看自己的当前任务",
-            f"{prefix} 历史 - 查看自己的最近任务",
-            f"{prefix} 历史 失败 - 查看自己的失败任务",
-            f"{prefix} 重试 123456 - 重试自己的失败任务",
+            f"{prefix} 历史 5 - 查看自己的最近任务",
+            f"{prefix} 历史 失败 5 - 查看自己的失败任务",
             f"{prefix} 帮助 - 查看本帮助",
             "",
             "管理员：",
-            f"{prefix} 管理 清空",
-            f"{prefix} 管理 kill 123456",
-            f"{prefix} 管理 kill 全部 123456",
-            f"{prefix} 管理 插队 123456",
-            f"{prefix} 管理 失败",
-            f"{prefix} 好友申请",
-            f"{prefix} 同意好友 1 / 拒绝好友 1",
+            f"{admin_prefix} 清空",
+            f"{admin_prefix} kill 123456",
+            f"{admin_prefix} kill 全部 123456",
+            f"{admin_prefix} 插队 123456",
+            f"{admin_prefix} 失败",
+            f"{admin_prefix} 失败 最近 5",
+            f"{admin_prefix} 失败 21",
+            f"{admin_prefix} 失败 删除 21",
         ]
     )
 
@@ -117,18 +119,6 @@ def format_favorite_list(items: Sequence[FavoriteItem], command_prefix: str = "/
     return "\n".join(lines)
 
 
-def format_friend_request_list(records: Sequence[FriendRequestRecord], command_prefix: str = "/jm") -> str:
-    if not records:
-        return "当前没有待处理好友申请。"
-
-    lines = ["待处理好友申请："]
-    for record in records:
-        comment = f"：{record.comment}" if record.comment else ""
-        lines.append(f"#{record.id} QQ {record.user_id}{comment}")
-        lines.append(f"   同意：{command_prefix} 同意好友 {record.id}；拒绝：{command_prefix} 拒绝好友 {record.id}")
-    return "\n".join(lines)
-
-
 def format_queue_summary(active_jobs: Sequence[AlbumQueueJob], *, limit: int = 10) -> str:
     """Return a compact summary for active queue jobs."""
 
@@ -137,8 +127,9 @@ def format_queue_summary(active_jobs: Sequence[AlbumQueueJob], *, limit: int = 1
 
     lines = [f"当前队列共 {len(active_jobs)} 个任务："]
     for job in active_jobs[:limit]:
-        target = f"群 {job.group_id}" if job.destination_type == "group" else f"私聊 {job.user_id}"
-        lines.append(f"#{job.id} JM{job.album_id} {job.status} {target}")
+        target = "群聊" if job.destination_type == "group" else "私聊"
+        status = "处理中" if job.status == "processing" else "排队"
+        lines.append(f"{job.album_id} {status}（{target}）")
     if len(active_jobs) > limit:
         lines.append(f"还有 {len(active_jobs) - limit} 个未显示。")
     return "\n".join(lines)
@@ -162,13 +153,13 @@ def format_task_canceled(album_id: str) -> str:
     return f"JM{album_id} 已取消，不再上传。"
 
 
-def format_task_failed(album_id: str, error: str | None = None) -> str:
+def format_task_failed(album_id: str, job_id: int, error: str | None = None) -> str:
     """Return a friendly failure message without exposing raw exception text."""
 
     reason = _format_public_failure_reason(error)
     if reason is not None:
         return f"JM{album_id} 处理失败：{reason}"
-    return f"JM{album_id} 处理失败，请稍后重试或联系管理员查看原因。"
+    return f"JM{album_id} 出现技术原因，联系管理员处理 #{job_id}。"
 
 
 def format_my_tasks(job_positions: Sequence[tuple[AlbumQueueJob, int]]) -> str:
@@ -196,27 +187,8 @@ def format_task_history(jobs: Sequence[AlbumQueueJob], *, failed_only: bool = Fa
     title = "你最近失败的任务：" if failed_only else "你最近的任务："
     lines = [title]
     for index, job in enumerate(jobs, start=1):
-        error = "：失败原因已记录，请稍后重试或联系管理员" if job.status == "failed" else ""
-        lines.append(f"{index}. JM{job.album_id} {job.status}{error}")
+        lines.append(f"{index}. #{job.id} JM{job.album_id} {job.status}")
     return "\n".join(lines)
-
-
-def format_retry_enqueued(album_id: str, ahead_count: int) -> str:
-    """Return retry enqueue confirmation."""
-
-    return f"JM{album_id} 已重新加入队列，前面还有{ahead_count}篇漫画正在处理。"
-
-
-def format_retry_missing(album_id: str) -> str:
-    """Return message when no retryable failure belongs to the caller."""
-
-    return f"没有找到你在这里失败过的 JM{album_id} 任务。"
-
-
-def format_retry_duplicate(album_id: str, ahead_count: int) -> str:
-    """Return message when the retry target is already active."""
-
-    return f"JM{album_id} 已经在队列中，前面还有{ahead_count}篇漫画正在处理。"
 
 
 def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:
@@ -231,6 +203,35 @@ def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:
         error = f"：{_format_admin_error(job.error)}" if job.error else ""
         lines.append(f"#{job.id} JM{job.album_id} {target}{error}")
     return "\n".join(lines)
+
+
+def format_admin_failed_detail(job: AlbumQueueJob | None) -> str:
+    """Return detailed failure information for one admin-selected task."""
+
+    if job is None or job.status != "failed":
+        return "没有找到失败任务。"
+
+    target = f"群 {job.group_id}" if job.destination_type == "group" else f"私聊 {job.user_id}"
+    error = job.error or "未知错误"
+    return "\n".join(
+        [
+            f"#{job.id} JM{job.album_id} {target}",
+            f"用户：{job.user_id}",
+            f"时间：{job.updated_at}",
+            "失败原因：",
+            error,
+        ]
+    )
+
+
+def format_admin_failed_deleted(job_id: int, deleted: bool) -> str:
+    if deleted:
+        return f"已删除失败记录 #{job_id}。"
+    return f"没有找到失败任务 #{job_id}。"
+
+
+def is_public_nonpersistent_failure(error: str | None) -> bool:
+    return _format_public_failure_reason(error) is not None
 
 
 def _format_admin_error(error: str) -> str:

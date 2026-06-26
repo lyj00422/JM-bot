@@ -2,35 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import nonebot
-from nonebot import get_driver, on_message, on_request
+from nonebot import get_driver, on_message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
-from nonebot.adapters.onebot.v11 import Bot, FriendRequestEvent, GroupMessageEvent, MessageEvent, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 from nonebot.rule import Rule
 
 from jmbot.config import load_config
 from jmbot.core.command_service import (
     QueueTarget,
     admin_clear_queue,
+    admin_delete_failed_task,
+    admin_failed_task_detail,
     admin_failed_tasks,
     admin_jump_album,
     admin_kill_album,
-    approve_friend_request,
     cancel_album_request,
     deliver_cover,
     deliver_preview,
     enqueue_album_request,
     favorite_album,
     favorite_summary,
-    friend_request_summary,
     my_tasks_summary,
+    prune_history,
     progress_summary,
     query_album_detail_message,
     query_album_search_message,
-    record_friend_request,
-    reject_friend_request,
     remove_favorite_album,
     queue_summary,
-    retry_failed_album,
     task_history,
 )
 from jmbot.core.cleanup import cleanup_album_files
@@ -40,7 +38,7 @@ from jmbot.core.jm_service import DownloadRequest, DownloadSettings, download_di
 from jmbot.core.pdf_builder import collect_images
 from jmbot.core.job_executor import run_album_job_with_timeout
 from jmbot.core.message_scope import is_friend_private_message
-from jmbot.core.parser import JmMessage, parse_jm_message
+from jmbot.core.parser import JmMessage, parse_jm_admin_message, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 from jmbot.core.queue_processor import process_next_album_job
 from jmbot.core.recovery import recover_interrupted_jobs
@@ -95,37 +93,18 @@ async def _start_queue_worker_on_connect(bot: Bot) -> None:
 async def _is_jm_command(event: MessageEvent) -> bool:
     """Return True when the incoming QQ message is a JM command."""
 
-    return (
+    plaintext = event.get_plaintext()
+    return bool(
         parse_jm_message(
-            event.get_plaintext(),
+            plaintext,
             CONFIG.command_prefix,
             default_format=CONFIG.default_format,
         )
-        is not None
+        or parse_jm_admin_message(plaintext, CONFIG.admin_command_prefix)
     )
 
 
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
-friend_request_matcher = on_request(priority=5, block=False)
-
-
-@friend_request_matcher.handle()
-async def handle_friend_request(bot: Bot, event) -> None:
-    if not isinstance(event, FriendRequestEvent):
-        return
-
-    message = record_friend_request(
-        USER_STORE,
-        user_id=event.user_id,
-        flag=event.flag,
-        comment=event.comment,
-    )
-    for admin_user_id in CONFIG.superuser_ids:
-        await bot.call_api(
-            "send_private_msg",
-            user_id=admin_user_id,
-            message=f"{message}\n私聊发送 {CONFIG.command_prefix} 好友申请 可查看并处理。",
-        )
 
 
 @jm_matcher.handle()
@@ -147,11 +126,19 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         default_format=CONFIG.default_format,
     )
     if command is None:
+        command = parse_jm_admin_message(event.get_plaintext(), CONFIG.admin_command_prefix)
+    if command is None:
         return
 
     target = _target_from_event(event)
     if target is None:
         return
+
+    prune_history(
+        ALBUM_QUEUE,
+        retention_days=CONFIG.history_retention_days,
+        max_per_user=CONFIG.history_max_per_user,
+    )
 
     should_start_worker = await _handle_parsed_command(bot, event, command, target)
     if should_start_worker:
@@ -192,7 +179,7 @@ async def _handle_parsed_command(
         return False
 
     if command.action == "help":
-        await jm_matcher.send(format_help(CONFIG.command_prefix))
+        await jm_matcher.send(format_help(CONFIG.command_prefix, CONFIG.admin_command_prefix))
         return False
 
     if command.action == "detail":
@@ -246,8 +233,6 @@ async def _handle_parsed_command(
         return False
 
     if command.action == "progress":
-        if command.album_id is None:
-            return False
         await jm_matcher.send(
             progress_summary(
                 ALBUM_QUEUE,
@@ -300,59 +285,18 @@ async def _handle_parsed_command(
         return False
 
     if command.action == "history":
-        await jm_matcher.send(task_history(ALBUM_QUEUE, target, failed_only=command.failed_only))
+        await jm_matcher.send(
+            task_history(
+                ALBUM_QUEUE,
+                target,
+                failed_only=command.failed_only,
+                limit=command.limit,
+            )
+        )
         return False
-
-    if command.action == "retry":
-        if command.album_id is None:
-            return False
-        await jm_matcher.send(retry_failed_album(ALBUM_QUEUE, command.album_id, target))
-        return True
 
     if event.user_id not in CONFIG.superuser_ids:
         await jm_matcher.send("你没有 JM 管理权限。")
-        return False
-
-    if command.action in {"friend_requests", "friend_approve", "friend_reject"} and not isinstance(event, PrivateMessageEvent):
-        await jm_matcher.send("好友申请管理请和机器人私聊使用。")
-        return False
-
-    if command.action == "friend_requests":
-        await jm_matcher.send(friend_request_summary(USER_STORE, command_prefix=CONFIG.command_prefix))
-        return False
-
-    if command.action == "friend_approve":
-        if command.request_id is None:
-            return False
-        await jm_matcher.send(
-            await approve_friend_request(
-                USER_STORE,
-                command.request_id,
-                admin_user_id=event.user_id,
-                set_request=lambda *, flag, approve: bot.call_api(
-                    "set_friend_add_request",
-                    flag=flag,
-                    approve=approve,
-                ),
-            )
-        )
-        return False
-
-    if command.action == "friend_reject":
-        if command.request_id is None:
-            return False
-        await jm_matcher.send(
-            await reject_friend_request(
-                USER_STORE,
-                command.request_id,
-                admin_user_id=event.user_id,
-                set_request=lambda *, flag, approve: bot.call_api(
-                    "set_friend_add_request",
-                    flag=flag,
-                    approve=approve,
-                ),
-            )
-        )
         return False
 
     if command.action == "admin_clear":
@@ -374,12 +318,21 @@ async def _handle_parsed_command(
         return True
 
     if command.action == "admin_failed":
-        message = admin_failed_tasks(ALBUM_QUEUE)
+        if command.request_id is not None:
+            message = admin_failed_task_detail(ALBUM_QUEUE, command.request_id)
+        else:
+            message = admin_failed_tasks(ALBUM_QUEUE, limit=command.limit)
         if isinstance(event, GroupMessageEvent):
             await bot.call_api("send_private_msg", user_id=event.user_id, message=message)
             await jm_matcher.send("最近失败任务已私聊发送给管理员。")
         else:
             await jm_matcher.send(message)
+        return False
+
+    if command.action == "admin_failed_delete":
+        if command.request_id is None:
+            return False
+        await jm_matcher.send(admin_delete_failed_task(ALBUM_QUEUE, command.request_id))
         return False
 
     return False

@@ -12,15 +12,13 @@ from jmbot.core.catalog_service import AlbumDetail, SearchKind, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_album_detail,
+    format_admin_failed_deleted,
+    format_admin_failed_detail,
     format_admin_failed_tasks,
     format_favorite_list,
-    format_friend_request_list,
     format_my_tasks,
     format_query_failed,
     format_queue_summary,
-    format_retry_duplicate,
-    format_retry_enqueued,
-    format_retry_missing,
     format_search_result,
     format_task_history,
 )
@@ -36,9 +34,6 @@ SearchQuery = Callable[..., SearchResult]
 CoverQuery = Callable[..., CoverResult]
 PreviewQuery = Callable[..., PreviewResult]
 MediaDeliverer = Callable[[Path], Awaitable[None]]
-FriendRequestSetter = Callable[..., Awaitable[None]]
-
-
 @dataclass(frozen=True)
 class QueueTarget:
     """Queue delivery target extracted from a QQ message."""
@@ -90,73 +85,6 @@ def remove_favorite_album(store: UserDataStore, album_id: str, target: QueueTarg
 
 def favorite_summary(store: UserDataStore, target: QueueTarget, *, command_prefix: str = "/jm") -> str:
     return format_favorite_list(store.list_favorites(target.user_id), command_prefix)
-
-
-def record_friend_request(store: UserDataStore, *, user_id: int, flag: str, comment: str | None) -> str:
-    record = store.record_friend_request(user_id=user_id, flag=flag, comment=comment)
-    return f"收到好友申请 #{record.id}：QQ {record.user_id}。"
-
-
-def friend_request_summary(store: UserDataStore, *, command_prefix: str = "/jm") -> str:
-    return format_friend_request_list(store.list_friend_requests(status="pending"), command_prefix)
-
-
-async def approve_friend_request(
-    store: UserDataStore,
-    request_id: int,
-    *,
-    admin_user_id: int,
-    set_request: FriendRequestSetter,
-) -> str:
-    return await _decide_friend_request(
-        store,
-        request_id,
-        admin_user_id=admin_user_id,
-        approve=True,
-        set_request=set_request,
-    )
-
-
-async def reject_friend_request(
-    store: UserDataStore,
-    request_id: int,
-    *,
-    admin_user_id: int,
-    set_request: FriendRequestSetter,
-) -> str:
-    return await _decide_friend_request(
-        store,
-        request_id,
-        admin_user_id=admin_user_id,
-        approve=False,
-        set_request=set_request,
-    )
-
-
-async def _decide_friend_request(
-    store: UserDataStore,
-    request_id: int,
-    *,
-    admin_user_id: int,
-    approve: bool,
-    set_request: FriendRequestSetter,
-) -> str:
-    record = store.get_friend_request(request_id)
-    if record is None or record.status != "pending":
-        return f"没有找到待处理好友申请 #{request_id}。"
-
-    try:
-        await set_request(flag=record.flag, approve=approve)
-    except Exception as exc:
-        store.mark_friend_request_failed(request_id, str(exc))
-        LOGGER.exception("Friend request #%s decision failed", request_id)
-        return f"好友申请 #{request_id} 处理失败，请稍后重试。"
-
-    decided = store.decide_friend_request(request_id, approve=approve, admin_user_id=admin_user_id)
-    if decided is None:
-        return f"没有找到待处理好友申请 #{request_id}。"
-    action = "同意" if approve else "拒绝"
-    return f"已{action}好友申请 #{request_id}（QQ {decided.user_id}）。"
 
 
 async def query_album_detail_message(
@@ -303,7 +231,13 @@ def my_tasks_summary(queue: PersistentAlbumQueue, target: QueueTarget) -> str:
     return format_my_tasks([(job, queue.count_ahead(job.id)) for job in jobs])
 
 
-def task_history(queue: PersistentAlbumQueue, target: QueueTarget, *, failed_only: bool = False) -> str:
+def task_history(
+    queue: PersistentAlbumQueue,
+    target: QueueTarget,
+    *,
+    failed_only: bool = False,
+    limit: int | None = None,
+) -> str:
     """Return the caller's recent task history in the current context."""
 
     jobs = queue.list_history_for_user(
@@ -311,41 +245,31 @@ def task_history(queue: PersistentAlbumQueue, target: QueueTarget, *, failed_onl
         group_id=target.group_id,
         user_id=target.user_id,
         failed_only=failed_only,
+        limit=limit,
     )
     return format_task_history(jobs, failed_only=failed_only)
 
 
-def retry_failed_album(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget) -> str:
-    """Retry the caller's latest failed job for this album in the current context."""
-
-    failed = queue.find_latest_failed_for_user(
-        album_id,
-        destination_type=target.destination_type,
-        group_id=target.group_id,
-        user_id=target.user_id,
-    )
-    if failed is None:
-        return format_retry_missing(album_id)
-
-    try:
-        job = _enqueue(
-            queue,
-            album_id,
-            target,
-            output_format=failed.output_format,
-            chapters=failed.chapters,
-        )
-    except DuplicateAlbumJobError as exc:
-        job = exc.existing_job
-        return format_retry_duplicate(album_id, queue.count_ahead(job.id))
-
-    return format_retry_enqueued(album_id, queue.count_ahead(job.id))
-
-
-def admin_failed_tasks(queue: PersistentAlbumQueue, *, limit: int = 10) -> str:
+def admin_failed_tasks(queue: PersistentAlbumQueue, *, limit: int | None = None) -> str:
     """Return recent failed jobs across all contexts for admins."""
 
     return format_admin_failed_tasks(queue.list_failed_jobs(limit=limit))
+
+
+def admin_failed_task_detail(queue: PersistentAlbumQueue, job_id: int) -> str:
+    """Return raw stored failure detail for an admin-selected failed job."""
+
+    job = queue.get_job(job_id)
+    return format_admin_failed_detail(job)
+
+
+def admin_delete_failed_task(queue: PersistentAlbumQueue, job_id: int) -> str:
+    """Delete one stored failed job by queue task id."""
+
+    job = queue.get_job(job_id)
+    if job is None or job.status != "failed":
+        return format_admin_failed_deleted(job_id, False)
+    return format_admin_failed_deleted(job_id, queue.delete_job(job_id))
 
 
 def admin_clear_queue(queue: PersistentAlbumQueue) -> str:
@@ -394,11 +318,21 @@ def admin_jump_album(queue: PersistentAlbumQueue, album_id: str, target: QueueTa
 
 def progress_summary(
     queue: PersistentAlbumQueue,
-    album_id: str,
+    album_id: str | None,
     target: QueueTarget,
     *,
     mode: str,
 ) -> str:
+    if album_id is None:
+        latest = queue.find_latest_active_for_user(
+            destination_type=target.destination_type,
+            group_id=target.group_id,
+            user_id=target.user_id,
+        )
+        if latest is None:
+            return "没有找到你在这里提交的活动任务。"
+        album_id = latest.album_id
+
     jobs = [
         job
         for job in queue.list_jobs()
@@ -435,6 +369,12 @@ def progress_summary(
             minutes, seconds = divmod(seconds, 60)
             lines.append(f"   已运行：{minutes} 分 {seconds} 秒")
     return "\n".join(lines)
+
+
+def prune_history(queue: PersistentAlbumQueue, *, retention_days: int, max_per_user: int) -> int:
+    """Prune old finished queue records according to configured retention."""
+
+    return queue.prune_history(retention_days=retention_days, max_per_user=max_per_user)
 
 
 def _enqueue(

@@ -6,24 +6,22 @@ from pathlib import Path
 from jmbot.core.command_service import (
     QueueTarget,
     admin_clear_queue,
+    admin_delete_failed_task,
+    admin_failed_task_detail,
     admin_failed_tasks,
     admin_jump_album,
     admin_kill_album,
-    approve_friend_request,
     cancel_album_request,
     enqueue_album_request,
     favorite_album,
     favorite_summary,
     deliver_cover,
     deliver_preview,
-    record_friend_request,
     query_album_detail_message,
     query_album_search_message,
     my_tasks_summary,
-    reject_friend_request,
     remove_favorite_album,
     progress_summary,
-    retry_failed_album,
     task_history,
 )
 from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
@@ -86,6 +84,19 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("ZIP 章节1,3", message)
         self.assertNotIn("3 / 10", message)
         self.assertNotIn("5 / 5", message)
+
+    def test_progress_summary_without_id_uses_latest_active_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+            queue.enqueue_private("111111", user_id=42)
+            latest = queue.enqueue_private("222222", user_id=42)
+            queue.update_progress(latest.id, stage="building", current=4, total=4)
+
+            message = progress_summary(queue, None, target, mode="stage")
+
+        self.assertIn("JM222222 当前进度", message)
+        self.assertNotIn("JM111111 当前进度", message)
 
     def test_enqueue_duplicate_reports_existing_job(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +180,7 @@ class CommandServiceTest(unittest.TestCase):
             queue.mark_failed(other_failed.id, "other failed")
 
             all_message = task_history(queue, target)
-            failed_message = task_history(queue, target, failed_only=True)
+            failed_message = task_history(queue, target, failed_only=True, limit=1)
             other_message = task_history(queue, other, failed_only=True)
 
         self.assertIn("JM111111", all_message)
@@ -177,45 +188,8 @@ class CommandServiceTest(unittest.TestCase):
         self.assertNotIn("JM333333", all_message)
         self.assertIn("JM222222", failed_message)
         self.assertNotIn("JM111111", failed_message)
+        self.assertIn(f"#{failed.id}", failed_message)
         self.assertIn("JM333333", other_message)
-
-    def test_retry_failed_album_requeues_own_failed_job(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
-            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
-            failed = queue.enqueue_group("111111", group_id=10001, user_id=42)
-            queue.mark_failed(failed.id, "network failed")
-
-            message = retry_failed_album(queue, "111111", target)
-            active_jobs = queue.list_active_for_user(destination_type="group", group_id=10001, user_id=42)
-
-        self.assertIn("已重新加入队列", message)
-        self.assertEqual([job.album_id for job in active_jobs], ["111111"])
-
-    def test_retry_failed_album_reports_existing_active_job(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
-            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
-            failed = queue.enqueue_group("111111", group_id=10001, user_id=42)
-            queue.mark_failed(failed.id, "network failed")
-            queue.enqueue_group("111111", group_id=10001, user_id=42)
-
-            message = retry_failed_album(queue, "111111", target)
-            active_jobs = queue.list_active_for_user(destination_type="group", group_id=10001, user_id=42)
-
-        self.assertIn("已经在队列中", message)
-        self.assertEqual(len(active_jobs), 1)
-
-    def test_retry_failed_album_rejects_missing_or_other_user_failure(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
-            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
-            other_failed = queue.enqueue_group("111111", group_id=10001, user_id=99)
-            queue.mark_failed(other_failed.id, "other failed")
-
-            message = retry_failed_album(queue, "111111", target)
-
-        self.assertIn("没有找到", message)
 
     def test_admin_failed_tasks_lists_global_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -230,6 +204,21 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("最近失败任务", message)
         self.assertIn("JM111111", message)
         self.assertNotIn("JM222222", message)
+
+    def test_admin_failed_detail_and_delete_by_task_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            failed = queue.enqueue_private("111111", user_id=42)
+            queue.mark_failed(failed.id, "secret upstream failure")
+
+            detail = admin_failed_task_detail(queue, failed.id)
+            deleted = admin_delete_failed_task(queue, failed.id)
+            missing = admin_failed_task_detail(queue, failed.id)
+
+        self.assertIn("#", detail)
+        self.assertIn("secret upstream failure", detail)
+        self.assertIn("已删除失败记录", deleted)
+        self.assertIn("没有找到失败任务", missing)
 
     def test_favorite_commands_are_user_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,58 +239,6 @@ class CommandServiceTest(unittest.TestCase):
         self.assertNotIn("JM222222", summary)
         self.assertIn("已取消收藏", removed)
         self.assertIn("还没有收藏", empty)
-
-    def test_records_friend_request_for_admin_review(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = UserDataStore(Path(tmp) / "user.sqlite3")
-
-            message = record_friend_request(store, user_id=123456, flag="flag-a", comment="hello")
-            records = store.list_friend_requests(status="pending")
-
-        self.assertIn("#1", message)
-        self.assertIn("123456", message)
-        self.assertEqual(records[0].flag, "flag-a")
-
-class FriendRequestCommandServiceTest(unittest.IsolatedAsyncioTestCase):
-    async def test_approve_friend_request_calls_onebot_and_marks_record(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = UserDataStore(Path(tmp) / "user.sqlite3")
-            record = store.record_friend_request(user_id=123456, flag="flag-a", comment="hello")
-            calls = []
-
-            async def set_request(*, flag, approve):
-                calls.append((flag, approve))
-
-            message = await approve_friend_request(store, record.id, admin_user_id=42, set_request=set_request)
-            decided = store.list_friend_requests()[0]
-
-        self.assertEqual(calls, [("flag-a", True)])
-        self.assertIn("已同意", message)
-        self.assertEqual(decided.status, "approved")
-
-    async def test_reject_friend_request_calls_onebot_and_marks_record(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = UserDataStore(Path(tmp) / "user.sqlite3")
-            record = store.record_friend_request(user_id=123456, flag="flag-a", comment="hello")
-            calls = []
-
-            async def set_request(*, flag, approve):
-                calls.append((flag, approve))
-
-            message = await reject_friend_request(store, record.id, admin_user_id=42, set_request=set_request)
-            decided = store.list_friend_requests()[0]
-
-        self.assertEqual(calls, [("flag-a", False)])
-        self.assertIn("已拒绝", message)
-        self.assertEqual(decided.status, "rejected")
-
-    async def test_friend_request_decision_reports_missing_or_finished_record(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = UserDataStore(Path(tmp) / "user.sqlite3")
-
-            message = await approve_friend_request(store, 99, admin_user_id=42, set_request=lambda **kwargs: None)
-
-        self.assertIn("没有找到待处理", message)
 
 class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_detail_query_uses_cache_after_first_call(self):

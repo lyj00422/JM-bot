@@ -27,14 +27,11 @@ JmAction = Literal[
     "favorite_list",
     "my_tasks",
     "history",
-    "retry",
-    "friend_requests",
-    "friend_approve",
-    "friend_reject",
     "admin_clear",
     "admin_kill",
     "admin_jump",
     "admin_failed",
+    "admin_failed_delete",
 ]
 
 
@@ -52,6 +49,7 @@ class JmMessage:
     keyword: str | None = None
     page: int = 1
     request_id: int | None = None
+    limit: int | None = None
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -108,9 +106,6 @@ def parse_jm_message(
 
     patterns: list[tuple[str, JmAction, bool]] = [
         (rf"^\s*{prefix}\s+撤回\s+([0-9]+)\s*$", "cancel", False),
-        (rf"^\s*{prefix}\s+管理\s+kill\s+全部\s+([0-9]+)\s*$", "admin_kill", True),
-        (rf"^\s*{prefix}\s+管理\s+kill\s+([0-9]+)\s*$", "admin_kill", False),
-        (rf"^\s*{prefix}\s+管理\s+插队\s+([0-9]+)\s*$", "admin_jump", False),
     ]
     for pattern, action, all_targets in patterns:
         match = re.match(pattern, message, re.IGNORECASE)
@@ -133,6 +128,9 @@ def parse_jm_message(
     if progress_match is not None:
         return JmMessage(action="progress", album_id=progress_match.group(1))
 
+    if re.match(rf"^\s*{prefix}\s+进度\s*$", message, re.IGNORECASE):
+        return JmMessage(action="progress")
+
     search_match = re.match(rf"^\s*{prefix}\s+(搜索|search|作者)\s+(.+?)\s*$", message, re.IGNORECASE)
     if search_match is not None:
         search_kind = "author" if search_match.group(1).lower() == "作者" else "site"
@@ -152,17 +150,6 @@ def parse_jm_message(
     if re.match(rf"^\s*{prefix}\s+(收藏|我的收藏)\s*$", message, re.IGNORECASE):
         return JmMessage(action="favorite_list")
 
-    if re.match(rf"^\s*{prefix}\s+好友申请\s*$", message, re.IGNORECASE):
-        return JmMessage(action="friend_requests")
-
-    friend_approve_match = re.match(rf"^\s*{prefix}\s+同意好友\s+([0-9]+)\s*$", message, re.IGNORECASE)
-    if friend_approve_match is not None:
-        return JmMessage(action="friend_approve", request_id=int(friend_approve_match.group(1)))
-
-    friend_reject_match = re.match(rf"^\s*{prefix}\s+拒绝好友\s+([0-9]+)\s*$", message, re.IGNORECASE)
-    if friend_reject_match is not None:
-        return JmMessage(action="friend_reject", request_id=int(friend_reject_match.group(1)))
-
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")
 
@@ -172,20 +159,56 @@ def parse_jm_message(
     if re.match(rf"^\s*{prefix}\s+(我的|my)\s*$", message, re.IGNORECASE):
         return JmMessage(action="my_tasks")
 
-    if re.match(rf"^\s*{prefix}\s+(历史|history)\s*$", message, re.IGNORECASE):
-        return JmMessage(action="history")
+    failed_history_match = re.match(rf"^\s*{prefix}\s+历史\s+失败(?:\s+([0-9]+))?\s*$", message, re.IGNORECASE)
+    if failed_history_match is not None:
+        limit = _parse_optional_limit(failed_history_match.group(1))
+        if limit == 0:
+            return None
+        return JmMessage(action="history", failed_only=True, limit=limit)
 
-    if re.match(rf"^\s*{prefix}\s+历史\s+失败\s*$", message, re.IGNORECASE):
-        return JmMessage(action="history", failed_only=True)
+    history_match = re.match(rf"^\s*{prefix}\s+(?:历史|history)(?:\s+([0-9]+))?\s*$", message, re.IGNORECASE)
+    if history_match is not None:
+        limit = _parse_optional_limit(history_match.group(1))
+        if limit == 0:
+            return None
+        return JmMessage(action="history", limit=limit)
 
-    retry_match = re.match(rf"^\s*{prefix}\s+重试\s+([0-9]+)\s*$", message, re.IGNORECASE)
-    if retry_match is not None:
-        return JmMessage(action="retry", album_id=retry_match.group(1))
+    return None
 
-    if re.match(rf"^\s*{prefix}\s+管理\s+清空\s*$", message, re.IGNORECASE):
+
+def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> JmMessage | None:
+    """Parse admin-only JM commands that use the dedicated `/jmg` prefix."""
+
+    prefix = re.escape(admin_command_prefix)
+    patterns: list[tuple[str, JmAction, bool]] = [
+        (rf"^\s*{prefix}\s+kill\s+全部\s+([0-9]+)\s*$", "admin_kill", True),
+        (rf"^\s*{prefix}\s+kill\s+([0-9]+)\s*$", "admin_kill", False),
+        (rf"^\s*{prefix}\s+插队\s+([0-9]+)\s*$", "admin_jump", False),
+    ]
+    for pattern, action, all_targets in patterns:
+        match = re.match(pattern, message, re.IGNORECASE)
+        if match is not None:
+            return JmMessage(action=action, album_id=match.group(1), all_targets=all_targets)
+
+    if re.match(rf"^\s*{prefix}\s+清空\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_clear")
 
-    if re.match(rf"^\s*{prefix}\s+管理\s+失败\s*$", message, re.IGNORECASE):
+    failed_delete_match = re.match(rf"^\s*{prefix}\s+失败\s+删除\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if failed_delete_match is not None:
+        return JmMessage(action="admin_failed_delete", request_id=int(failed_delete_match.group(1)))
+
+    failed_recent_match = re.match(rf"^\s*{prefix}\s+失败\s+最近\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if failed_recent_match is not None:
+        limit = _parse_optional_limit(failed_recent_match.group(1))
+        if limit == 0:
+            return None
+        return JmMessage(action="admin_failed", limit=limit)
+
+    failed_detail_match = re.match(rf"^\s*{prefix}\s+失败\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if failed_detail_match is not None:
+        return JmMessage(action="admin_failed", request_id=int(failed_detail_match.group(1)))
+
+    if re.match(rf"^\s*{prefix}\s+失败\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_failed")
 
     return None
@@ -229,3 +252,10 @@ def _parse_search_keyword_and_page(value: str) -> tuple[str | None, int]:
         page = parsed_page
 
     return (text, page) if text else (None, 1)
+
+
+def _parse_optional_limit(value: str | None) -> int | None:
+    if value is None:
+        return None
+    limit = int(value)
+    return limit if limit > 0 else 0

@@ -10,6 +10,7 @@ from jmbot.core.formatter import (
     format_task_failed,
     format_task_started,
     format_task_uploaded,
+    is_public_nonpersistent_failure,
 )
 from jmbot.core.jm_service import AlbumJobResult
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
@@ -92,9 +93,21 @@ async def process_next_album_job(
             await _notify_safely(notify, job, format_task_canceled(job.album_id))
             return True
 
-        queue.mark_failed(job.id, str(exc))
+        error = str(exc)
+        if is_public_nonpersistent_failure(error):
+            queue.delete_job(job.id)
+            LOGGER.exception(
+                "JM%s queue job %s failed with public nonpersistent error after %.1f seconds",
+                job.album_id,
+                job.id,
+                time.monotonic() - started,
+            )
+            await _notify_safely(notify, job, format_task_failed(job.album_id, job.id, error))
+            return True
+
+        queue.mark_failed(job.id, error)
         LOGGER.exception("JM%s queue job %s failed after %.1f seconds", job.album_id, job.id, time.monotonic() - started)
-        await _notify_safely(notify, job, format_task_failed(job.album_id, str(exc)))
+        await _notify_safely(notify, job, format_task_failed(job.album_id, job.id, error))
     else:
         LOGGER.info("Finished JM%s queue job %s in %.1f seconds", job.album_id, job.id, time.monotonic() - started)
         await _notify_safely(notify, job, format_task_uploaded(job.album_id, output_names))

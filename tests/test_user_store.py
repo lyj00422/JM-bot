@@ -26,24 +26,6 @@ class UserDataStoreTest(unittest.TestCase):
         self.assertFalse(missing)
         self.assertEqual([item.album_id for item in after_remove], ["222222"])
 
-    def test_records_and_decides_friend_requests(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = UserDataStore(Path(tmp) / "user.sqlite3")
-
-            record = store.record_friend_request(user_id=123, flag="flag-a", comment="hello")
-            same = store.record_friend_request(user_id=123, flag="flag-a", comment="new")
-            pending = store.list_friend_requests(status="pending")
-            decided = store.decide_friend_request(record.id, approve=True, admin_user_id=42)
-            second_decision = store.decide_friend_request(record.id, approve=False, admin_user_id=42)
-
-        self.assertEqual(record.id, same.id)
-        self.assertEqual(same.comment, "new")
-        self.assertEqual(len(pending), 1)
-        self.assertIsNotNone(decided)
-        self.assertEqual(decided.status, "approved")
-        self.assertEqual(decided.admin_user_id, 42)
-        self.assertIsNone(second_decision)
-
 
 if __name__ == "__main__":
     unittest.main()

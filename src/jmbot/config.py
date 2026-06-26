@@ -13,6 +13,7 @@ class BotConfig:
     host: str
     port: int
     command_prefix: str
+    admin_command_prefix: str
     download_root: Path
     output_root: Path
     option_root: Path
@@ -40,6 +41,8 @@ class BotConfig:
     superuser_ids: set[int]
     clean_after_upload: bool
     group_folder_name: str
+    history_retention_days: int
+    history_max_per_user: int
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -105,6 +108,7 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         host=source.get("JM_BOT_HOST", "127.0.0.1"),
         port=int(source.get("JM_BOT_PORT", "8080")),
         command_prefix=source.get("JM_BOT_COMMAND_PREFIX", "/jm"),
+        admin_command_prefix=source.get("JM_BOT_ADMIN_COMMAND_PREFIX", "/jmg"),
         download_root=Path(source.get("JM_BOT_DOWNLOAD_ROOT", "data/downloads")),
         output_root=Path(source.get("JM_BOT_OUTPUT_ROOT", "data/output")),
         option_root=Path(source.get("JM_BOT_OPTION_ROOT", "data/options")),
@@ -132,4 +136,6 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         superuser_ids=parse_int_set(source.get("JM_BOT_SUPERUSERS")),
         clean_after_upload=parse_bool(source.get("JM_BOT_CLEAN_AFTER_UPLOAD"), True),
         group_folder_name=source.get("JM_BOT_GROUP_FOLDER", "JM"),
+        history_retention_days=parse_positive_int(source, "JM_BOT_HISTORY_RETENTION_DAYS", 7),
+        history_max_per_user=parse_positive_int(source, "JM_BOT_HISTORY_MAX_PER_USER", 50),
     )
