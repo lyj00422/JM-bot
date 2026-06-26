@@ -21,6 +21,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_OUTPUT_ROOT": "output",
                 "JM_BOT_OPTION_ROOT": "options",
                 "JM_BOT_QUEUE_DB": "queue/jobs.sqlite3",
+                "JM_BOT_USER_DB": "queue/user.sqlite3",
                 "JM_BOT_PREVIEW_ROOT": "preview",
                 "JM_BOT_MAX_CONCURRENCY": "3",
                 "JM_BOT_DOWNLOAD_IMAGE_THREADS": "3",
@@ -52,6 +53,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.output_root, Path("output"))
         self.assertEqual(config.option_root, Path("options"))
         self.assertEqual(config.queue_db_path, Path("queue/jobs.sqlite3"))
+        self.assertEqual(config.user_db_path, Path("queue/user.sqlite3"))
         self.assertEqual(config.preview_root, Path("preview"))
         self.assertEqual(config.max_concurrency, 3)
         self.assertEqual(config.download_image_threads, 3)
@@ -83,6 +85,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_load_config_uses_queue_db_default(self):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
+        self.assertEqual(load_config({}).user_db_path, Path("data/user.sqlite3"))
 
     def test_load_config_enables_general_defaults(self):
         config = load_config({})

@@ -9,13 +9,19 @@ from jmbot.core.command_service import (
     admin_failed_tasks,
     admin_jump_album,
     admin_kill_album,
+    approve_friend_request,
     cancel_album_request,
     enqueue_album_request,
+    favorite_album,
+    favorite_summary,
     deliver_cover,
     deliver_preview,
+    record_friend_request,
     query_album_detail_message,
     query_album_search_message,
     my_tasks_summary,
+    reject_friend_request,
+    remove_favorite_album,
     progress_summary,
     retry_failed_album,
     task_history,
@@ -24,6 +30,7 @@ from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.persistent_queue import PersistentAlbumQueue
+from jmbot.core.user_store import UserDataStore
 
 
 class CommandServiceTest(unittest.TestCase):
@@ -223,6 +230,78 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("最近失败任务", message)
         self.assertIn("JM111111", message)
         self.assertNotIn("JM222222", message)
+
+    def test_favorite_commands_are_user_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = UserDataStore(Path(tmp) / "user.sqlite3")
+            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
+            other = QueueTarget(destination_type="group", group_id=10001, user_id=99)
+
+            added = favorite_album(store, "111111", target)
+            duplicate = favorite_album(store, "111111", target)
+            favorite_album(store, "222222", other)
+            summary = favorite_summary(store, target)
+            removed = remove_favorite_album(store, "111111", target)
+            empty = favorite_summary(store, target)
+
+        self.assertIn("已收藏", added)
+        self.assertIn("已经收藏", duplicate)
+        self.assertIn("JM111111", summary)
+        self.assertNotIn("JM222222", summary)
+        self.assertIn("已取消收藏", removed)
+        self.assertIn("还没有收藏", empty)
+
+    def test_records_friend_request_for_admin_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = UserDataStore(Path(tmp) / "user.sqlite3")
+
+            message = record_friend_request(store, user_id=123456, flag="flag-a", comment="hello")
+            records = store.list_friend_requests(status="pending")
+
+        self.assertIn("#1", message)
+        self.assertIn("123456", message)
+        self.assertEqual(records[0].flag, "flag-a")
+
+class FriendRequestCommandServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_approve_friend_request_calls_onebot_and_marks_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = UserDataStore(Path(tmp) / "user.sqlite3")
+            record = store.record_friend_request(user_id=123456, flag="flag-a", comment="hello")
+            calls = []
+
+            async def set_request(*, flag, approve):
+                calls.append((flag, approve))
+
+            message = await approve_friend_request(store, record.id, admin_user_id=42, set_request=set_request)
+            decided = store.list_friend_requests()[0]
+
+        self.assertEqual(calls, [("flag-a", True)])
+        self.assertIn("已同意", message)
+        self.assertEqual(decided.status, "approved")
+
+    async def test_reject_friend_request_calls_onebot_and_marks_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = UserDataStore(Path(tmp) / "user.sqlite3")
+            record = store.record_friend_request(user_id=123456, flag="flag-a", comment="hello")
+            calls = []
+
+            async def set_request(*, flag, approve):
+                calls.append((flag, approve))
+
+            message = await reject_friend_request(store, record.id, admin_user_id=42, set_request=set_request)
+            decided = store.list_friend_requests()[0]
+
+        self.assertEqual(calls, [("flag-a", False)])
+        self.assertIn("已拒绝", message)
+        self.assertEqual(decided.status, "rejected")
+
+    async def test_friend_request_decision_reports_missing_or_finished_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = UserDataStore(Path(tmp) / "user.sqlite3")
+
+            message = await approve_friend_request(store, 99, admin_user_id=42, set_request=lambda **kwargs: None)
+
+        self.assertIn("没有找到待处理", message)
 
 class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_detail_query_uses_cache_after_first_call(self):

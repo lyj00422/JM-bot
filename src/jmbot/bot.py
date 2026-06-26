@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import nonebot
-from nonebot import get_driver, on_message
+from nonebot import get_driver, on_message, on_request
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, FriendRequestEvent, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 from nonebot.rule import Rule
 
 from jmbot.config import load_config
@@ -14,14 +14,21 @@ from jmbot.core.command_service import (
     admin_failed_tasks,
     admin_jump_album,
     admin_kill_album,
+    approve_friend_request,
     cancel_album_request,
     deliver_cover,
     deliver_preview,
     enqueue_album_request,
+    favorite_album,
+    favorite_summary,
+    friend_request_summary,
     my_tasks_summary,
     progress_summary,
     query_album_detail_message,
     query_album_search_message,
+    record_friend_request,
+    reject_friend_request,
+    remove_favorite_album,
     queue_summary,
     retry_failed_album,
     task_history,
@@ -43,6 +50,7 @@ from jmbot.core.sender import (
     upload_group_pdf,
     upload_private_pdf,
 )
+from jmbot.core.user_store import UserDataStore
 
 
 CONFIG = load_config()
@@ -58,6 +66,7 @@ DOWNLOAD_SETTINGS = DownloadSettings(
     progress_mode=CONFIG.progress_mode,
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
+USER_STORE = UserDataStore(CONFIG.user_db_path)
 DETAIL_CACHE = DetailCache(
     ttl_seconds=CONFIG.detail_cache_ttl_seconds,
     max_entries=CONFIG.query_cache_max_entries,
@@ -97,6 +106,26 @@ async def _is_jm_command(event: MessageEvent) -> bool:
 
 
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
+friend_request_matcher = on_request(priority=5, block=False)
+
+
+@friend_request_matcher.handle()
+async def handle_friend_request(bot: Bot, event) -> None:
+    if not isinstance(event, FriendRequestEvent):
+        return
+
+    message = record_friend_request(
+        USER_STORE,
+        user_id=event.user_id,
+        flag=event.flag,
+        comment=event.comment,
+    )
+    for admin_user_id in CONFIG.superuser_ids:
+        await bot.call_api(
+            "send_private_msg",
+            user_id=admin_user_id,
+            message=f"{message}\n私聊发送 {CONFIG.command_prefix} 好友申请 可查看并处理。",
+        )
 
 
 @jm_matcher.handle()
@@ -243,6 +272,29 @@ async def _handle_parsed_command(
         await jm_matcher.send(message)
         return False
 
+    if command.action == "favorite_add":
+        if command.album_id is None:
+            return False
+        await jm_matcher.send(
+            favorite_album(
+                USER_STORE,
+                command.album_id,
+                target,
+                command_prefix=CONFIG.command_prefix,
+            )
+        )
+        return False
+
+    if command.action == "favorite_remove":
+        if command.album_id is None:
+            return False
+        await jm_matcher.send(remove_favorite_album(USER_STORE, command.album_id, target))
+        return False
+
+    if command.action == "favorite_list":
+        await jm_matcher.send(favorite_summary(USER_STORE, target, command_prefix=CONFIG.command_prefix))
+        return False
+
     if command.action == "my_tasks":
         await jm_matcher.send(my_tasks_summary(ALBUM_QUEUE, target))
         return False
@@ -259,6 +311,48 @@ async def _handle_parsed_command(
 
     if event.user_id not in CONFIG.superuser_ids:
         await jm_matcher.send("你没有 JM 管理权限。")
+        return False
+
+    if command.action in {"friend_requests", "friend_approve", "friend_reject"} and not isinstance(event, PrivateMessageEvent):
+        await jm_matcher.send("好友申请管理请和机器人私聊使用。")
+        return False
+
+    if command.action == "friend_requests":
+        await jm_matcher.send(friend_request_summary(USER_STORE, command_prefix=CONFIG.command_prefix))
+        return False
+
+    if command.action == "friend_approve":
+        if command.request_id is None:
+            return False
+        await jm_matcher.send(
+            await approve_friend_request(
+                USER_STORE,
+                command.request_id,
+                admin_user_id=event.user_id,
+                set_request=lambda *, flag, approve: bot.call_api(
+                    "set_friend_add_request",
+                    flag=flag,
+                    approve=approve,
+                ),
+            )
+        )
+        return False
+
+    if command.action == "friend_reject":
+        if command.request_id is None:
+            return False
+        await jm_matcher.send(
+            await reject_friend_request(
+                USER_STORE,
+                command.request_id,
+                admin_user_id=event.user_id,
+                set_request=lambda *, flag, approve: bot.call_api(
+                    "set_friend_add_request",
+                    flag=flag,
+                    approve=approve,
+                ),
+            )
+        )
         return False
 
     if command.action == "admin_clear":
