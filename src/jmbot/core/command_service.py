@@ -13,6 +13,8 @@ from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_album_detail,
     format_admin_failed_tasks,
+    format_favorite_list,
+    format_friend_request_list,
     format_my_tasks,
     format_query_failed,
     format_queue_summary,
@@ -25,6 +27,7 @@ from jmbot.core.formatter import (
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.query_executor import query_album_detail, query_album_search, query_cover, query_preview
+from jmbot.core.user_store import UserDataStore
 
 
 LOGGER = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ SearchQuery = Callable[..., SearchResult]
 CoverQuery = Callable[..., CoverResult]
 PreviewQuery = Callable[..., PreviewResult]
 MediaDeliverer = Callable[[Path], Awaitable[None]]
+FriendRequestSetter = Callable[..., Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,95 @@ def enqueue_album_request(
     format_label = output_format.upper()
     chapter_label = f"，章节 {','.join(map(str, chapters))}" if chapters else ""
     return f"收到 JM{album_id}（{format_label}{chapter_label}），已加入队列，前面还有{ahead_count}篇漫画正在处理。"
+
+
+def favorite_album(
+    store: UserDataStore,
+    album_id: str,
+    target: QueueTarget,
+    *,
+    command_prefix: str = "/jm",
+) -> str:
+    if store.add_favorite(target.user_id, album_id):
+        return f"JM{album_id} 已收藏。发送 {command_prefix} 我的收藏 可以查看。"
+    return f"JM{album_id} 已经收藏过了。"
+
+
+def remove_favorite_album(store: UserDataStore, album_id: str, target: QueueTarget) -> str:
+    if store.remove_favorite(target.user_id, album_id):
+        return f"JM{album_id} 已取消收藏。"
+    return f"你的收藏里没有 JM{album_id}。"
+
+
+def favorite_summary(store: UserDataStore, target: QueueTarget, *, command_prefix: str = "/jm") -> str:
+    return format_favorite_list(store.list_favorites(target.user_id), command_prefix)
+
+
+def record_friend_request(store: UserDataStore, *, user_id: int, flag: str, comment: str | None) -> str:
+    record = store.record_friend_request(user_id=user_id, flag=flag, comment=comment)
+    return f"收到好友申请 #{record.id}：QQ {record.user_id}。"
+
+
+def friend_request_summary(store: UserDataStore, *, command_prefix: str = "/jm") -> str:
+    return format_friend_request_list(store.list_friend_requests(status="pending"), command_prefix)
+
+
+async def approve_friend_request(
+    store: UserDataStore,
+    request_id: int,
+    *,
+    admin_user_id: int,
+    set_request: FriendRequestSetter,
+) -> str:
+    return await _decide_friend_request(
+        store,
+        request_id,
+        admin_user_id=admin_user_id,
+        approve=True,
+        set_request=set_request,
+    )
+
+
+async def reject_friend_request(
+    store: UserDataStore,
+    request_id: int,
+    *,
+    admin_user_id: int,
+    set_request: FriendRequestSetter,
+) -> str:
+    return await _decide_friend_request(
+        store,
+        request_id,
+        admin_user_id=admin_user_id,
+        approve=False,
+        set_request=set_request,
+    )
+
+
+async def _decide_friend_request(
+    store: UserDataStore,
+    request_id: int,
+    *,
+    admin_user_id: int,
+    approve: bool,
+    set_request: FriendRequestSetter,
+) -> str:
+    record = store.get_friend_request(request_id)
+    if record is None or record.status != "pending":
+        return f"没有找到待处理好友申请 #{request_id}。"
+
+    try:
+        await set_request(flag=record.flag, approve=approve)
+    except Exception as exc:
+        store.mark_friend_request_failed(request_id, str(exc))
+        LOGGER.exception("Friend request #%s decision failed", request_id)
+        return f"好友申请 #{request_id} 处理失败，请稍后重试。"
+
+    decided = store.decide_friend_request(request_id, approve=approve, admin_user_id=admin_user_id)
+    if decided is None:
+        return f"没有找到待处理好友申请 #{request_id}。"
+    action = "同意" if approve else "拒绝"
+    return f"已{action}好友申请 #{request_id}（QQ {decided.user_id}）。"
 
 
 async def query_album_detail_message(

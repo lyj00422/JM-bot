@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from jmbot.core.catalog_service import AlbumDetail, SearchResult
 from jmbot.core.persistent_queue import AlbumQueueJob
+from jmbot.core.user_store import FavoriteItem, FriendRequestRecord
 
 
 def format_help(command_prefix: str = "/jm") -> str:
@@ -17,6 +18,8 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 详情 123456 - 查看漫画详情",
             f"{prefix} 搜索 关键词 - 搜索漫画",
             f"{prefix} 作者 作者名 - 搜索作者作品",
+            f"{prefix} 收藏 123456 - 收藏漫画",
+            f"{prefix} 我的收藏 - 查看收藏",
             f"{prefix} 封面 123456 - 发送封面图片",
             f"{prefix} 预览 123456 - 上传前 10 页预览 PDF",
             f"{prefix} 123456 zip - 下载 ZIP",
@@ -36,6 +39,8 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 管理 kill 全部 123456",
             f"{prefix} 管理 插队 123456",
             f"{prefix} 管理 失败",
+            f"{prefix} 好友申请",
+            f"{prefix} 同意好友 1 / 拒绝好友 1",
         ]
     )
 
@@ -99,6 +104,28 @@ def format_search_result(result: SearchResult, command_prefix: str = "/jm") -> s
     if result.page < result.page_count:
         command = "作者" if result.kind == "author" else "搜索"
         lines.append(f"下一页：{prefix} {command} {result.keyword} {result.page + 1}")
+    return "\n".join(lines)
+
+
+def format_favorite_list(items: Sequence[FavoriteItem], command_prefix: str = "/jm") -> str:
+    if not items:
+        return f"你还没有收藏漫画。发送 {command_prefix} 收藏 123456 可以收藏。"
+
+    lines = ["我的收藏："]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"{index}. JM{item.album_id} 下载：{command_prefix} {item.album_id}")
+    return "\n".join(lines)
+
+
+def format_friend_request_list(records: Sequence[FriendRequestRecord], command_prefix: str = "/jm") -> str:
+    if not records:
+        return "当前没有待处理好友申请。"
+
+    lines = ["待处理好友申请："]
+    for record in records:
+        comment = f"：{record.comment}" if record.comment else ""
+        lines.append(f"#{record.id} QQ {record.user_id}{comment}")
+        lines.append(f"   同意：{command_prefix} 同意好友 {record.id}；拒绝：{command_prefix} 拒绝好友 {record.id}")
     return "\n".join(lines)
 
 

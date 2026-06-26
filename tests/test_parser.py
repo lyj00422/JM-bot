@@ -198,6 +198,37 @@ class ParseJmCommandTest(unittest.TestCase):
     def test_removed_download_pagination_command_is_not_parsed(self):
         self.assertIsNone(parse_jm_message("/jm 下载 2"))
 
+    def test_parse_favorite_commands(self):
+        cases = [
+            ("/jm 收藏 123456", "favorite_add", "123456"),
+            ("/jm 取消收藏 123456", "favorite_remove", "123456"),
+            ("/jm 我的收藏", "favorite_list", None),
+            ("/jm 收藏", "favorite_list", None),
+        ]
+
+        for message, action, album_id in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, action)
+                self.assertEqual(result.album_id, album_id)
+
+    def test_parse_admin_friend_request_commands(self):
+        cases = [
+            ("/jm 好友申请", "friend_requests", None),
+            ("/jm 同意好友 12", "friend_approve", 12),
+            ("/jm 拒绝好友 12", "friend_reject", 12),
+        ]
+
+        for message, action, request_id in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, action)
+                self.assertEqual(result.request_id, request_id)
+
     def test_parse_admin_commands(self):
         cases = [
             ("/jm 管理 清空", "admin_clear", None, False),

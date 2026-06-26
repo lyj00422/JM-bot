@@ -4,6 +4,8 @@ from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.formatter import (
     format_album_detail,
     format_admin_failed_tasks,
+    format_favorite_list,
+    format_friend_request_list,
     format_help,
     format_query_failed,
     format_queue_summary,
@@ -12,6 +14,7 @@ from jmbot.core.formatter import (
     format_task_history,
 )
 from jmbot.core.persistent_queue import AlbumQueueJob
+from jmbot.core.user_store import FavoriteItem, FriendRequestRecord
 
 
 class FormatterTest(unittest.TestCase):
@@ -46,6 +49,8 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 进度 123456", message)
         self.assertIn("/jm 搜索 关键词", message)
         self.assertIn("/jm 作者 作者名", message)
+        self.assertIn("/jm 收藏 123456", message)
+        self.assertIn("/jm 我的收藏", message)
         self.assertNotIn("/jm 下载 1", message)
 
     def test_format_album_detail_limits_tags_and_chapters(self):
@@ -141,6 +146,43 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("没有搜到「不存在」", message)
         self.assertIn("换个关键词", message)
         self.assertNotIn("未知", message)
+
+    def test_format_favorite_list(self):
+        message = format_favorite_list(
+            [
+                FavoriteItem(user_id=42, album_id="111111", created_at="2026-06-26T00:00:00.000Z"),
+                FavoriteItem(user_id=42, album_id="222222", created_at="2026-06-26T00:00:00.000Z"),
+            ],
+            "/jm",
+        )
+
+        self.assertIn("我的收藏", message)
+        self.assertIn("JM111111", message)
+        self.assertIn("/jm 111111", message)
+
+    def test_format_friend_request_list(self):
+        message = format_friend_request_list(
+            [
+                FriendRequestRecord(
+                    id=7,
+                    user_id=123456,
+                    flag="flag-a",
+                    comment="请通过",
+                    status="pending",
+                    admin_user_id=None,
+                    error=None,
+                    created_at="2026-06-26T00:00:00.000Z",
+                    updated_at="2026-06-26T00:00:00.000Z",
+                )
+            ],
+            "/jm",
+        )
+
+        self.assertIn("#7", message)
+        self.assertIn("123456", message)
+        self.assertIn("请通过", message)
+        self.assertIn("/jm 同意好友 7", message)
+        self.assertIn("/jm 拒绝好友 7", message)
 
     def test_admin_failed_formats_napcat_missing_mount_as_diagnosis(self):
         job = AlbumQueueJob(

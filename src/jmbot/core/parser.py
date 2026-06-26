@@ -22,9 +22,15 @@ JmAction = Literal[
     "preview",
     "progress",
     "search",
+    "favorite_add",
+    "favorite_remove",
+    "favorite_list",
     "my_tasks",
     "history",
     "retry",
+    "friend_requests",
+    "friend_approve",
+    "friend_reject",
     "admin_clear",
     "admin_kill",
     "admin_jump",
@@ -45,6 +51,7 @@ class JmMessage:
     search_kind: str = "site"
     keyword: str | None = None
     page: int = 1
+    request_id: int | None = None
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -133,6 +140,28 @@ def parse_jm_message(
         if keyword is None:
             return None
         return JmMessage(action="search", search_kind=search_kind, keyword=keyword, page=page)
+
+    favorite_add_match = re.match(rf"^\s*{prefix}\s+收藏\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if favorite_add_match is not None:
+        return JmMessage(action="favorite_add", album_id=favorite_add_match.group(1))
+
+    favorite_remove_match = re.match(rf"^\s*{prefix}\s+取消收藏\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if favorite_remove_match is not None:
+        return JmMessage(action="favorite_remove", album_id=favorite_remove_match.group(1))
+
+    if re.match(rf"^\s*{prefix}\s+(收藏|我的收藏)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="favorite_list")
+
+    if re.match(rf"^\s*{prefix}\s+好友申请\s*$", message, re.IGNORECASE):
+        return JmMessage(action="friend_requests")
+
+    friend_approve_match = re.match(rf"^\s*{prefix}\s+同意好友\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if friend_approve_match is not None:
+        return JmMessage(action="friend_approve", request_id=int(friend_approve_match.group(1)))
+
+    friend_reject_match = re.match(rf"^\s*{prefix}\s+拒绝好友\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if friend_reject_match is not None:
+        return JmMessage(action="friend_reject", request_id=int(friend_reject_match.group(1)))
 
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")

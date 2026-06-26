@@ -50,6 +50,9 @@ git pull origin release/aliyun-2c2g
 /jm 搜索 关键词 2
 /jm 作者 作者名
 /jm 作者 作者名 2
+/jm 收藏 123456
+/jm 取消收藏 123456
+/jm 我的收藏
 /jm 封面 123456
 /jm 预览 123456
 /jm 123456 pdf
@@ -79,6 +82,9 @@ git pull origin release/aliyun-2c2g
 /jm 管理 kill 全部 123456
 /jm 管理 插队 123456
 /jm 管理 失败
+/jm 好友申请
+/jm 同意好友 1
+/jm 拒绝好友 1
 ```
 
 说明：
@@ -87,6 +93,8 @@ git pull origin release/aliyun-2c2g
 - 详情查询在独立子进程中执行，查询超时会被强制终止，不会长期占住 Bot 事件循环。
 - `/jm 搜索 <关键词> [页码]` 使用站内搜索，返回可下载的 JM ID 列表；`/jm 作者 <作者名> [页码]` 搜索作者作品。
 - 搜索结果只展示 ID、标题和有效标签，不展示容易缺失的页数和更新时间；结果底部会提示下一页命令。
+- `/jm 收藏 <id>`、`/jm 取消收藏 <id>`、`/jm 我的收藏` 管理自己的收藏；收藏按 QQ 用户全局保存，不分群。
+- 收到好友申请时，Bot 会记录申请并私聊通知 `JM_BOT_SUPERUSERS`；管理员和 Bot 私聊发送 `/jm 好友申请` 查看，再用 `/jm 同意好友 <记录ID>` 或 `/jm 拒绝好友 <记录ID>` 处理。
 - `/jm 封面 <id>` 直接在当前群或私聊发送封面图片，不上传到群文件。
 - `/jm 详情 <id>` 返回详情文字后会自动附带封面；封面失败不影响详情文字。
 - `/jm 预览 <id>` 下载第一章正文前 10 页，不包含封面，生成 `JM<id>（预览）.pdf`。
@@ -159,6 +167,7 @@ JM_BOT_DOWNLOAD_ROOT=data/downloads
 JM_BOT_OUTPUT_ROOT=data/output
 JM_BOT_OPTION_ROOT=data/options
 JM_BOT_QUEUE_DB=data/queue.sqlite3
+JM_BOT_USER_DB=data/user.sqlite3
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 JM_BOT_GROUP_FOLDER=JM
 ```
@@ -185,7 +194,7 @@ JM_BOT_ALLOWED_FORMATS=pdf,zip
 JM_BOT_PROGRESS_MODE=stage
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_USER_DB` 保存用户收藏和好友申请记录。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
 
 ## 服务器部署
 
@@ -406,6 +415,7 @@ rm -f /opt/jmbot/data/output/mount-test.txt
 
 `data/options/` 中的 jmcomic 配置会按漫画 ID 自动生成，不需要手动维护。
 `data/queue.sqlite3` 保存未完成队列；如果你想清空队列，请先停止服务后再删除该文件。
+`data/user.sqlite3` 保存收藏和好友申请记录；删除它会清空这些用户数据。
 
 ## 注意事项
 
