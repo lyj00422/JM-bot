@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -260,12 +261,17 @@ class PersistentAlbumQueue:
         group_id: int | None,
         user_id: int,
         failed_only: bool = False,
-        limit: int = 10,
+        limit: int | None = None,
     ) -> list[AlbumQueueJob]:
         statuses = ("failed",) if failed_only else ("done", "failed", "canceled")
         placeholders = ", ".join("?" for _ in statuses)
+        limit_sql = "" if limit is None else "LIMIT ?"
+        query_params: list[str | int] = []
         with self._connection() as connection:
             where, params = self._context_filter(destination_type, group_id, user_id)
+            query_params.extend([*params, *statuses])
+            if limit is not None:
+                query_params.append(limit)
             rows = connection.execute(
                 f"""
                 SELECT *
@@ -273,9 +279,9 @@ class PersistentAlbumQueue:
                 WHERE {where}
                   AND status IN ({placeholders})
                 ORDER BY id DESC
-                LIMIT ?
+                {limit_sql}
                 """,
-                tuple([*params, *statuses, limit]),
+                tuple(query_params),
             ).fetchall()
         return [_row_to_job(row) for row in rows]
 
@@ -303,19 +309,99 @@ class PersistentAlbumQueue:
             ).fetchone()
         return None if row is None else _row_to_job(row)
 
-    def list_failed_jobs(self, *, limit: int = 10) -> list[AlbumQueueJob]:
+    def list_failed_jobs(self, *, limit: int | None = None) -> list[AlbumQueueJob]:
+        limit_sql = "" if limit is None else "LIMIT ?"
+        params: tuple[int, ...] = () if limit is None else (limit,)
         with self._connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT *
                 FROM album_queue
                 WHERE status = 'failed'
                 ORDER BY id DESC
-                LIMIT ?
+                {limit_sql}
                 """,
-                (limit,),
+                params,
             ).fetchall()
         return [_row_to_job(row) for row in rows]
+
+    def get_job(self, job_id: int) -> AlbumQueueJob | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM album_queue WHERE id = ?", (job_id,)).fetchone()
+        return None if row is None else _row_to_job(row)
+
+    def delete_job(self, job_id: int) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute("DELETE FROM album_queue WHERE id = ?", (job_id,))
+            return cursor.rowcount == 1
+
+    def find_latest_active_for_user(
+        self,
+        *,
+        destination_type: DestinationType,
+        group_id: int | None,
+        user_id: int,
+    ) -> AlbumQueueJob | None:
+        with self._connection() as connection:
+            where, params = self._context_filter(destination_type, group_id, user_id)
+            row = connection.execute(
+                f"""
+                SELECT *
+                FROM album_queue
+                WHERE {where}
+                  AND status IN ('pending', 'processing')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return None if row is None else _row_to_job(row)
+
+    def prune_history(self, *, retention_days: int, max_per_user: int) -> int:
+        if retention_days < 1:
+            raise ValueError("retention_days must be at least 1")
+        if max_per_user < 1:
+            raise ValueError("max_per_user must be at least 1")
+
+        finished_statuses = ("done", "failed", "canceled")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%dT%H:%M:%fZ")
+        removed = 0
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM album_queue
+                WHERE status IN ('done', 'failed', 'canceled')
+                  AND updated_at < ?
+                """,
+                (cutoff,),
+            )
+            removed += cursor.rowcount
+
+            rows = connection.execute(
+                """
+                SELECT id, user_id
+                FROM album_queue
+                WHERE status IN ('done', 'failed', 'canceled')
+                ORDER BY user_id, id DESC
+                """
+            ).fetchall()
+            seen_by_user: dict[int, int] = {}
+            delete_ids: list[int] = []
+            for row in rows:
+                user_id = int(row["user_id"])
+                seen_by_user[user_id] = seen_by_user.get(user_id, 0) + 1
+                if seen_by_user[user_id] > max_per_user:
+                    delete_ids.append(int(row["id"]))
+
+            if delete_ids:
+                placeholders = ", ".join("?" for _ in delete_ids)
+                cursor = connection.execute(
+                    f"DELETE FROM album_queue WHERE id IN ({placeholders})",
+                    tuple(delete_ids),
+                )
+                removed += cursor.rowcount
+
+        return removed
 
     def cancel_pending_for_user(
         self,

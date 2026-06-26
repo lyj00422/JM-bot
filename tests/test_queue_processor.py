@@ -134,7 +134,7 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(processed)
         self.assertEqual(failed_rows[0].id, queued.id)
         self.assertEqual(failed_rows[0].error, "download failed for 222222")
-        self.assertTrue(any("处理失败" in message for _, message in messages))
+        self.assertTrue(any("出现技术原因" in message for _, message in messages))
 
     async def test_failure_notification_hides_raw_error_but_persists_it(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,7 +167,8 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(processed)
         self.assertEqual(failed_rows[0].id, queued.id)
         self.assertEqual(failed_rows[0].error, "secret upstream failure")
-        self.assertTrue(any("JM555555 处理失败" in message for message in messages))
+        self.assertTrue(any("JM555555 出现技术原因，联系管理员处理" in message for message in messages))
+        self.assertTrue(any(f"#{queued.id}" in message for message in messages))
         self.assertFalse(any("secret upstream failure" in message for message in messages))
 
     async def test_missing_album_failure_notification_tells_user_actionable_reason(self):
@@ -205,9 +206,10 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             )
 
             failed_rows = queue.list_jobs(status="failed")
+            all_rows = queue.list_jobs()
 
-        self.assertEqual(failed_rows[0].id, queued.id)
-        self.assertIn("Traceback", failed_rows[0].error)
+        self.assertEqual(failed_rows, [])
+        self.assertEqual(all_rows, [])
         self.assertTrue(any("本子不存在或仅登录用户可见" in message for message in messages))
         self.assertFalse(any("Traceback" in message for message in messages))
 

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from jmbot.core.persistent_queue import DuplicateAlbumJobError, PersistentAlbumQueue
@@ -247,6 +248,95 @@ class PersistentAlbumQueueTest(unittest.TestCase):
         self.assertEqual([job.id for job in jobs], [own_failed.id, own_done.id])
         self.assertEqual([job.id for job in failed_jobs], [own_failed.id])
         self.assertNotIn(active.id, [job.id for job in jobs])
+
+    def test_history_default_has_no_limit_but_accepts_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            ids = []
+            for album_id in ["111111", "222222", "333333"]:
+                job = queue.enqueue_private(album_id, user_id=42)
+                queue.mark_done(job.id)
+                ids.append(job.id)
+
+            all_jobs = queue.list_history_for_user(
+                destination_type="private",
+                group_id=None,
+                user_id=42,
+            )
+            limited_jobs = queue.list_history_for_user(
+                destination_type="private",
+                group_id=None,
+                user_id=42,
+                limit=2,
+            )
+
+        self.assertEqual([job.id for job in all_jobs], list(reversed(ids)))
+        self.assertEqual([job.id for job in limited_jobs], list(reversed(ids))[:2])
+
+    def test_find_latest_active_for_user_uses_recent_request_in_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            older = queue.enqueue_group("111111", group_id=10001, user_id=42)
+            newer = queue.enqueue_group("222222", group_id=10001, user_id=42)
+            queue.enqueue_group("333333", group_id=10002, user_id=42)
+            queue.enqueue_group("444444", group_id=10001, user_id=99)
+
+            found = queue.find_latest_active_for_user(
+                destination_type="group",
+                group_id=10001,
+                user_id=42,
+            )
+
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, newer.id)
+        self.assertNotEqual(found.id, older.id)
+
+    def test_delete_job_removes_one_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            job = queue.enqueue_private("111111", user_id=42)
+
+            deleted = queue.delete_job(job.id)
+            missing = queue.delete_job(job.id)
+
+        self.assertTrue(deleted)
+        self.assertFalse(missing)
+
+    def test_prune_history_removes_old_rows_and_enforces_per_user_max(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            old_job = queue.enqueue_private("100000", user_id=42)
+            queue.mark_done(old_job.id)
+            recent_ids = []
+            for album_id in ["111111", "222222", "333333"]:
+                job = queue.enqueue_private(album_id, user_id=42)
+                queue.mark_failed(job.id, f"failed {album_id}")
+                recent_ids.append(job.id)
+            other_user_job = queue.enqueue_private("444444", user_id=99)
+            queue.mark_failed(other_user_job.id, "failed other")
+
+            old_timestamp = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%fZ")
+            with queue._connection() as connection:
+                connection.execute(
+                    "UPDATE album_queue SET updated_at = ? WHERE id = ?",
+                    (old_timestamp, old_job.id),
+                )
+
+            removed = queue.prune_history(retention_days=7, max_per_user=2)
+            user_history = queue.list_history_for_user(
+                destination_type="private",
+                group_id=None,
+                user_id=42,
+            )
+            other_history = queue.list_history_for_user(
+                destination_type="private",
+                group_id=None,
+                user_id=99,
+            )
+
+        self.assertEqual(removed, 2)
+        self.assertEqual([job.id for job in user_history], list(reversed(recent_ids))[:2])
+        self.assertEqual([job.id for job in other_history], [other_user_job.id])
 
     def test_finds_latest_failed_job_for_current_user_context_only(self):
         with tempfile.TemporaryDirectory() as tmp:

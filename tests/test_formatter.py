@@ -3,18 +3,19 @@ import unittest
 from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.formatter import (
     format_album_detail,
+    format_admin_failed_detail,
     format_admin_failed_tasks,
     format_favorite_list,
-    format_friend_request_list,
     format_help,
     format_query_failed,
     format_queue_summary,
     format_search_result,
     format_task_failed,
     format_task_history,
+    is_public_nonpersistent_failure,
 )
 from jmbot.core.persistent_queue import AlbumQueueJob
-from jmbot.core.user_store import FavoriteItem, FriendRequestRecord
+from jmbot.core.user_store import FavoriteItem
 
 
 class FormatterTest(unittest.TestCase):
@@ -27,17 +28,21 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 我的", message)
         self.assertIn("/jm 历史", message)
         self.assertIn("/jm 历史 失败", message)
-        self.assertIn("/jm 重试 123456", message)
+        self.assertIn("/jm 进度", message)
         self.assertIn("/jm 帮助", message)
+        self.assertNotIn("/jm 重试", message)
+        self.assertNotIn("好友申请", message)
 
     def test_format_help_lists_existing_admin_commands(self):
-        message = format_help("/jm")
+        message = format_help("/jm", "/jmg")
 
-        self.assertIn("/jm 管理 清空", message)
-        self.assertIn("/jm 管理 kill 123456", message)
-        self.assertIn("/jm 管理 kill 全部 123456", message)
-        self.assertIn("/jm 管理 插队 123456", message)
-        self.assertIn("/jm 管理 失败", message)
+        self.assertIn("/jmg 清空", message)
+        self.assertIn("/jmg kill 123456", message)
+        self.assertIn("/jmg kill 全部 123456", message)
+        self.assertIn("/jmg 插队 123456", message)
+        self.assertIn("/jmg 失败", message)
+        self.assertIn("/jmg 失败 21", message)
+        self.assertNotIn("/jm 管理", message)
 
     def test_format_help_lists_detail_and_search_features(self):
         message = format_help("/jm")
@@ -160,30 +165,6 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("JM111111", message)
         self.assertIn("/jm 111111", message)
 
-    def test_format_friend_request_list(self):
-        message = format_friend_request_list(
-            [
-                FriendRequestRecord(
-                    id=7,
-                    user_id=123456,
-                    flag="flag-a",
-                    comment="请通过",
-                    status="pending",
-                    admin_user_id=None,
-                    error=None,
-                    created_at="2026-06-26T00:00:00.000Z",
-                    updated_at="2026-06-26T00:00:00.000Z",
-                )
-            ],
-            "/jm",
-        )
-
-        self.assertIn("#7", message)
-        self.assertIn("123456", message)
-        self.assertIn("请通过", message)
-        self.assertIn("/jm 同意好友 7", message)
-        self.assertIn("/jm 拒绝好友 7", message)
-
     def test_admin_failed_formats_napcat_missing_mount_as_diagnosis(self):
         job = AlbumQueueJob(
             id=21,
@@ -237,6 +218,28 @@ class FormatterTest(unittest.TestCase):
         self.assertNotIn("/opt/jmbot", message)
         self.assertNotIn("jm_exception", message)
 
+    def test_admin_failed_detail_includes_raw_error_for_admin_lookup(self):
+        job = AlbumQueueJob(
+            id=21,
+            album_id="1020215",
+            destination_type="group",
+            group_id=10001,
+            user_id=42,
+            status="failed",
+            attempts=1,
+            priority=0,
+            error="RuntimeError: secret upstream failure\nTraceback line",
+            created_at="2026-06-25T00:00:00.000Z",
+            updated_at="2026-06-25T00:00:00.000Z",
+        )
+
+        message = format_admin_failed_detail(job)
+
+        self.assertIn("#21 JM1020215", message)
+        self.assertIn("群 10001", message)
+        self.assertIn("secret upstream failure", message)
+        self.assertIn("Traceback line", message)
+
     def test_format_queue_summary_reports_empty_queue(self):
         message = format_queue_summary([])
 
@@ -275,21 +278,21 @@ class FormatterTest(unittest.TestCase):
         message = format_queue_summary(jobs, limit=1)
 
         self.assertIn("当前队列共 2 个任务", message)
-        self.assertIn("#1 JM111111 processing 群 10001", message)
+        self.assertIn("111111 处理中（群聊）", message)
         self.assertNotIn("JM222222", message)
         self.assertIn("还有 1 个未显示", message)
 
     def test_format_task_failed_hides_raw_error(self):
-        message = format_task_failed("123456", "secret upstream failure")
+        message = format_task_failed("123456", 17, "secret upstream failure")
 
-        self.assertIn("JM123456 处理失败", message)
-        self.assertIn("联系管理员", message)
+        self.assertIn("JM123456 出现技术原因，联系管理员处理 #17", message)
         self.assertNotIn("Traceback", message)
         self.assertNotIn("secret upstream failure", message)
 
     def test_format_task_failed_shows_actionable_missing_album_reason(self):
         message = format_task_failed(
             "206954",
+            27,
             "MissingAlbumPhotoException: 请求的本子不存在！该漫画只对登录用户可见\nTraceback...",
         )
 
@@ -297,6 +300,7 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("本子不存在或仅登录用户可见", message)
         self.assertIn("请检查 ID", message)
         self.assertNotIn("Traceback", message)
+        self.assertTrue(is_public_nonpersistent_failure("MissingAlbumPhotoException: 请求的本子不存在！"))
 
     def test_format_task_history_hides_failed_job_raw_error(self):
         job = AlbumQueueJob(
@@ -315,8 +319,8 @@ class FormatterTest(unittest.TestCase):
 
         message = format_task_history([job], failed_only=True)
 
-        self.assertIn("JM123456 failed", message)
-        self.assertIn("失败原因已记录", message)
+        self.assertIn("#1 JM123456 failed", message)
+        self.assertNotIn("失败原因已记录", message)
         self.assertNotIn("RuntimeError", message)
         self.assertNotIn("Traceback", message)
         self.assertNotIn("C:/secret", message)

@@ -28,7 +28,7 @@ git pull origin release/aliyun-2c2g
 - 支持 `/jm <数字ID>` 命令。
 - 支持 `/jm 撤回 <数字ID>` 撤回自己还在排队中的任务。
 - 支持 `/jm 队列` 查看当前待处理和正在处理的任务。
-- 支持超级管理员命令：`/jm 管理 清空`、`/jm 管理 kill <数字ID>`、`/jm 管理 kill 全部 <数字ID>`、`/jm 管理 插队 <数字ID>`。
+- 支持超级管理员命令：`/jmg 清空`、`/jmg kill <数字ID>`、`/jmg kill 全部 <数字ID>`、`/jmg 插队 <数字ID>`。
 - 支持 QQ 群和机器人好友私聊。
 - 每个漫画 ID 使用独立下载目录：`data/downloads/<id>`。
 - 生成 PDF 到：`data/output/JM<id>.pdf`。
@@ -59,13 +59,15 @@ git pull origin release/aliyun-2c2g
 /jm 123456 zip
 /jm 123456 章节 1,3-5
 /jm 123456 章节 1,3-5 zip
+/jm 进度
 /jm 进度 123456
 /jm 撤回 123456
 /jm 队列
 /jm 我的
 /jm 历史
+/jm 历史 5
 /jm 历史 失败
-/jm 重试 123456
+/jm 历史 失败 5
 /jm 帮助
 ```
 
@@ -77,14 +79,14 @@ git pull origin release/aliyun-2c2g
 管理员命令需要发送者 QQ 在 `JM_BOT_SUPERUSERS` 中：
 
 ```text
-/jm 管理 清空
-/jm 管理 kill 123456
-/jm 管理 kill 全部 123456
-/jm 管理 插队 123456
-/jm 管理 失败
-/jm 好友申请
-/jm 同意好友 1
-/jm 拒绝好友 1
+/jmg 清空
+/jmg kill 123456
+/jmg kill 全部 123456
+/jmg 插队 123456
+/jmg 失败
+/jmg 失败 最近 5
+/jmg 失败 21
+/jmg 失败 删除 21
 ```
 
 说明：
@@ -94,7 +96,6 @@ git pull origin release/aliyun-2c2g
 - `/jm 搜索 <关键词> [页码]` 使用站内搜索，返回可下载的 JM ID 列表；`/jm 作者 <作者名> [页码]` 搜索作者作品。
 - 搜索结果只展示 ID、标题和有效标签，不展示容易缺失的页数和更新时间；结果底部会提示下一页命令。
 - `/jm 收藏 <id>`、`/jm 取消收藏 <id>`、`/jm 我的收藏` 管理自己的收藏；收藏按 QQ 用户全局保存，不分群。
-- 收到好友申请时，Bot 会记录申请并私聊通知 `JM_BOT_SUPERUSERS`；管理员和 Bot 私聊发送 `/jm 好友申请` 查看，再用 `/jm 同意好友 <记录ID>` 或 `/jm 拒绝好友 <记录ID>` 处理。
 - `/jm 封面 <id>` 直接在当前群或私聊发送封面图片，不上传到群文件。
 - `/jm 详情 <id>` 返回详情文字后会自动附带封面；封面失败不影响详情文字。
 - `/jm 预览 <id>` 下载第一章正文前 10 页，不包含封面，生成 `JM<id>（预览）.pdf`。
@@ -102,17 +103,16 @@ git pull origin release/aliyun-2c2g
 - `/jm <id>` 和 `/jm <id> pdf` 下载 PDF；`/jm <id> zip` 下载保留章节目录的 ZIP。
 - `/jm <id> 章节 1,3-5 [pdf|zip]` 按详情中展示的章节编号下载，部分章节文件名会带 `（章节1,3-5）`。
 - 同一漫画的不同格式或章节组合可分别排队；完全相同的组合才判定为重复。
-- `/jm 进度 <id>` 手动查询当前任务。阿里云版默认只显示阶段与耗时，不主动发送进度消息。
+- `/jm 进度 <id>` 手动查询当前任务；`/jm 进度` 会自动匹配自己在当前群或当前私聊里最近提交的排队中、处理中任务。阿里云版默认只显示阶段与耗时，不主动发送进度消息。
 - `/jm 我的` 只显示自己在当前群或当前私聊里的排队中、处理中任务。
-- `/jm 历史` 只显示自己在当前群或当前私聊里的最近完成、失败、取消任务。
-- `/jm 历史 失败` 只显示自己的最近失败任务。
-- `/jm 重试 <id>` 只能重试自己在当前群或当前私聊里失败过的同一个漫画 ID。
-- `/jm 管理 清空` 只清空待排队任务，不影响正在处理的任务。
-- `/jm 管理 kill <id>` 只取消当前群或当前私聊里的对应任务。
-- `/jm 管理 kill 全部 <id>` 会取消所有群和私聊里的对应任务。
-- `/jm 管理 插队 <id>` 会把当前群或当前私聊里的任务放到队首；如果还没有这个任务，会先创建再插队。
-- `/jm 管理 失败` 会查看最近的全局失败任务，仅管理员可用。
-- 下载失败时，QQ 里只返回简短友好的失败提示；详细失败原因会保留在队列记录里，方便管理员后续排查。
+- `/jm 历史` 只显示自己在当前群或当前私聊里的已保留完成、失败、取消任务；`/jm 历史 5` 只看最近 5 条。
+- `/jm 历史 失败` 只显示自己的已保留失败任务；`/jm 历史 失败 5` 只看最近 5 条。
+- `/jmg 清空` 只清空待排队任务，不影响正在处理的任务。
+- `/jmg kill <id>` 只取消当前群或当前私聊里的对应任务。
+- `/jmg kill 全部 <id>` 会取消所有群和私聊里的对应任务。
+- `/jmg 插队 <id>` 会把当前群或当前私聊里的任务放到队首；如果还没有这个任务，会先创建再插队。
+- `/jmg 失败` 会查看已保留的全局失败任务；`/jmg 失败 最近 5` 只看最近 5 条；`/jmg 失败 <任务ID>` 查看详细失败原因；`/jmg 失败 删除 <任务ID>` 手动删除一条失败记录。
+- 下载失败时，ID 不存在或仅登录可见等用户可处理原因会直接显示给用户且不保留失败记录；其他技术原因只返回任务 ID，详细失败原因保留给管理员后续排查。
 
 ## 本地安装
 
@@ -160,6 +160,7 @@ ws://127.0.0.1:8080/onebot/v11/ws
 JM_BOT_HOST=127.0.0.1
 JM_BOT_PORT=8080
 JM_BOT_COMMAND_PREFIX=/jm
+JM_BOT_ADMIN_COMMAND_PREFIX=/jmg
 JM_BOT_MAX_CONCURRENCY=1
 JM_BOT_ALLOWED_GROUPS=123456789,987654321
 JM_BOT_SUPERUSERS=123456789
@@ -192,9 +193,11 @@ JM_BOT_PREVIEW_TIMEOUT_SECONDS=180
 JM_BOT_DEFAULT_FORMAT=pdf
 JM_BOT_ALLOWED_FORMATS=pdf,zip
 JM_BOT_PROGRESS_MODE=stage
+JM_BOT_HISTORY_RETENTION_DAYS=7
+JM_BOT_HISTORY_MAX_PER_USER=50
 ```
 
-`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_USER_DB` 保存用户收藏和好友申请记录。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
+`JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_USER_DB` 保存用户收藏记录。`JM_BOT_HISTORY_RETENTION_DAYS` 控制已完成、失败、取消任务的保留天数，默认 7 天；`JM_BOT_HISTORY_MAX_PER_USER` 控制每个用户最多保留多少条历史记录，默认 50 条。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
 
 ## 服务器部署
 
@@ -324,17 +327,17 @@ sudo systemctl restart jmbot
 
 ```bash
 # 本地机器
-PACKAGE=JMbot-v0.3.1.tar.gz
+PACKAGE=JMbot-v0.3.2.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.3.1.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.3.2.tar.gz
 scp "$PACKAGE" root@你的服务器IP:/tmp/
 
 # 服务器
 sudo systemctl stop jmbot
 sudo mkdir -p /opt/jmbot
-PACKAGE=JMbot-v0.3.1.tar.gz
+PACKAGE=JMbot-v0.3.2.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.3.1.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.3.2.tar.gz
 sudo tar -xzf "/tmp/$PACKAGE" -C /opt/jmbot --strip-components=1
 cd /opt/jmbot
 python3 -m venv .venv
@@ -383,6 +386,8 @@ JM_BOT_PREVIEW_TIMEOUT_SECONDS=180
 JM_BOT_DEFAULT_FORMAT=pdf
 JM_BOT_ALLOWED_FORMATS=pdf,zip
 JM_BOT_PROGRESS_MODE=stage
+JM_BOT_HISTORY_RETENTION_DAYS=7
+JM_BOT_HISTORY_MAX_PER_USER=50
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 ```
 
@@ -415,7 +420,7 @@ rm -f /opt/jmbot/data/output/mount-test.txt
 
 `data/options/` 中的 jmcomic 配置会按漫画 ID 自动生成，不需要手动维护。
 `data/queue.sqlite3` 保存未完成队列；如果你想清空队列，请先停止服务后再删除该文件。
-`data/user.sqlite3` 保存收藏和好友申请记录；删除它会清空这些用户数据。
+`data/user.sqlite3` 保存收藏记录；删除它会清空这些用户数据。
 
 ## 注意事项
 
