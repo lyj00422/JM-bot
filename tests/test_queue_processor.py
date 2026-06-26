@@ -170,6 +170,47 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("JM555555 处理失败" in message for message in messages))
         self.assertFalse(any("secret upstream failure" in message for message in messages))
 
+    async def test_missing_album_failure_notification_tells_user_actionable_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("206954", user_id=45)
+            messages = []
+            raw_error = (
+                "MissingAlbumPhotoException: 请求的本子不存在！(https://18comic.vip/album/206954/)\n"
+                "原因可能为:\n"
+                "1. id有误，检查你的本子id\n"
+                "2. 该漫画只对登录用户可见，请配置你的cookies\n\n"
+                "Traceback (most recent call last):\n"
+                "  File \"/opt/jmbot/src/jmbot/core/job_executor.py\", line 88, in _run_child\n"
+            )
+
+            async def run_job(job):
+                raise RuntimeError(raw_error)
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                raise AssertionError("private upload should not run")
+
+            async def notify(job, message):
+                messages.append(message)
+
+            await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+            )
+
+            failed_rows = queue.list_jobs(status="failed")
+
+        self.assertEqual(failed_rows[0].id, queued.id)
+        self.assertIn("Traceback", failed_rows[0].error)
+        self.assertTrue(any("本子不存在或仅登录用户可见" in message for message in messages))
+        self.assertFalse(any("Traceback" in message for message in messages))
+
     async def test_keeps_job_done_when_success_notification_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

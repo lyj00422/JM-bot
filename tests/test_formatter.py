@@ -205,6 +205,38 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("检查 /opt/jmbot 挂载", message)
         self.assertNotIn("ActionFailed", message)
 
+    def test_admin_failed_formats_missing_album_without_traceback(self):
+        job = AlbumQueueJob(
+            id=27,
+            album_id="206954",
+            destination_type="private",
+            group_id=None,
+            user_id=3065532050,
+            status="failed",
+            attempts=1,
+            priority=0,
+            error=(
+                "MissingAlbumPhotoException: 请求的本子不存在！(https://18comic.vip/album/206954/)\n"
+                "原因可能为:\n"
+                "1. id有误，检查你的本子id\n"
+                "2. 该漫画只对登录用户可见，请配置你的cookies，或者使用移动端Client（api）\n\n"
+                "Traceback (most recent call last):\n"
+                "  File \"/opt/jmbot/src/jmbot/core/job_executor.py\", line 88, in _run_child\n"
+                "jmcomic.jm_exception.MissingAlbumPhotoException: 请求的本子不存在！"
+            ),
+            created_at="2026-06-26T00:00:00.000Z",
+            updated_at="2026-06-26T00:00:00.000Z",
+        )
+
+        message = format_admin_failed_tasks([job])
+
+        self.assertIn("JM206954", message)
+        self.assertIn("本子不存在或仅登录用户可见", message)
+        self.assertIn("检查 ID", message)
+        self.assertNotIn("Traceback", message)
+        self.assertNotIn("/opt/jmbot", message)
+        self.assertNotIn("jm_exception", message)
+
     def test_format_queue_summary_reports_empty_queue(self):
         message = format_queue_summary([])
 
@@ -248,10 +280,22 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("还有 1 个未显示", message)
 
     def test_format_task_failed_hides_raw_error(self):
-        message = format_task_failed("123456")
+        message = format_task_failed("123456", "secret upstream failure")
 
         self.assertIn("JM123456 处理失败", message)
         self.assertIn("联系管理员", message)
+        self.assertNotIn("Traceback", message)
+        self.assertNotIn("secret upstream failure", message)
+
+    def test_format_task_failed_shows_actionable_missing_album_reason(self):
+        message = format_task_failed(
+            "206954",
+            "MissingAlbumPhotoException: 请求的本子不存在！该漫画只对登录用户可见\nTraceback...",
+        )
+
+        self.assertIn("JM206954 处理失败", message)
+        self.assertIn("本子不存在或仅登录用户可见", message)
+        self.assertIn("请检查 ID", message)
         self.assertNotIn("Traceback", message)
 
     def test_format_task_history_hides_failed_job_raw_error(self):
