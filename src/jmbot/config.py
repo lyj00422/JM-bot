@@ -90,7 +90,7 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         for item in source.get("JM_BOT_ALLOWED_FORMATS", "pdf,zip").split(",")
         if item.strip()
     }
-    progress_mode = source.get("JM_BOT_PROGRESS_MODE", "stage").strip().lower()
+    progress_mode = source.get("JM_BOT_PROGRESS_MODE", "precise").strip().lower()
     if default_format not in {"pdf", "zip"}:
         raise ValueError("JM_BOT_DEFAULT_FORMAT must be pdf or zip")
     if not allowed_formats or not allowed_formats <= {"pdf", "zip"}:

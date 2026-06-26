@@ -84,7 +84,7 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_uses_queue_db_default(self):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
 
-    def test_load_config_enables_auto_split_pdf_by_default_for_aliyun_branch(self):
+    def test_load_config_enables_general_defaults(self):
         config = load_config({})
 
         self.assertTrue(config.auto_split_pdf)
@@ -98,7 +98,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.preview_timeout_seconds, 180)
         self.assertEqual(config.default_format, "pdf")
         self.assertEqual(config.allowed_formats, {"pdf", "zip"})
-        self.assertEqual(config.progress_mode, "stage")
+        self.assertEqual(config.progress_mode, "precise")
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [

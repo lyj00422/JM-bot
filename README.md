@@ -94,7 +94,7 @@ git pull origin release/aliyun-2c2g
 - `/jm <id>` 和 `/jm <id> pdf` 下载 PDF；`/jm <id> zip` 下载保留章节目录的 ZIP。
 - `/jm <id> 章节 1,3-5 [pdf|zip]` 按详情中展示的章节编号下载，部分章节文件名会带 `（章节1,3-5）`。
 - 同一漫画的不同格式或章节组合可分别排队；完全相同的组合才判定为重复。
-- `/jm 进度 <id>` 手动查询当前任务。阿里云版默认只显示阶段与耗时，不主动发送进度消息。
+- `/jm 进度 <id>` 手动查询当前任务。通用版默认显示较精确的页数进度；阿里云版默认只显示阶段与耗时，不主动发送进度消息。
 - `/jm 我的` 只显示自己在当前群或当前私聊里的排队中、处理中任务。
 - `/jm 历史` 只显示自己在当前群或当前私聊里的最近完成、失败、取消任务。
 - `/jm 历史 失败` 只显示自己的最近失败任务。
@@ -182,7 +182,7 @@ JM_BOT_PREVIEW_PAGE_COUNT=10
 JM_BOT_PREVIEW_TIMEOUT_SECONDS=180
 JM_BOT_DEFAULT_FORMAT=pdf
 JM_BOT_ALLOWED_FORMATS=pdf,zip
-JM_BOT_PROGRESS_MODE=stage
+JM_BOT_PROGRESS_MODE=precise
 ```
 
 `JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。

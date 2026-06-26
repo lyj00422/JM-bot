@@ -152,6 +152,23 @@ class PersistentAlbumQueue:
     def mark_done(self, job_id: int) -> None:
         self._mark_finished(job_id, status="done", error=None)
 
+    def mark_done_if_processing(self, job_id: int) -> bool:
+        """Atomically finish a processing job without overwriting cancellation."""
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE album_queue
+                SET status = 'done',
+                    error = NULL,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?
+                  AND status = 'processing'
+                """,
+                (job_id,),
+            )
+            return cursor.rowcount == 1
+
     def mark_failed(self, job_id: int, error: str) -> None:
         self._mark_finished(job_id, status="failed", error=error)
 
