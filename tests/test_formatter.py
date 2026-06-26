@@ -1,12 +1,13 @@
 import unittest
 
-from jmbot.core.catalog_service import AlbumDetail
+from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.formatter import (
     format_album_detail,
     format_admin_failed_tasks,
     format_help,
     format_query_failed,
     format_queue_summary,
+    format_search_result,
     format_task_failed,
     format_task_history,
 )
@@ -35,7 +36,7 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 管理 插队 123456", message)
         self.assertIn("/jm 管理 失败", message)
 
-    def test_format_help_lists_detail_but_not_removed_search_features(self):
+    def test_format_help_lists_detail_and_search_features(self):
         message = format_help("/jm")
 
         self.assertIn("/jm 详情 123456", message)
@@ -43,7 +44,8 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 预览 123456", message)
         self.assertIn("/jm 123456 zip", message)
         self.assertIn("/jm 进度 123456", message)
-        self.assertNotIn("搜索", message)
+        self.assertIn("/jm 搜索 关键词", message)
+        self.assertIn("/jm 作者 作者名", message)
         self.assertNotIn("/jm 下载 1", message)
 
     def test_format_album_detail_limits_tags_and_chapters(self):
@@ -96,6 +98,49 @@ class FormatterTest(unittest.TestCase):
 
         self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
         self.assertNotIn("Traceback", message)
+
+    def test_format_search_result_lists_items_with_pagination(self):
+        result = SearchResult(
+            keyword="柊ぽぷら",
+            kind="author",
+            page=1,
+            page_count=3,
+            total=25,
+            items=(
+                SearchItem("111111", "作者作品一", ("中文", "全彩")),
+                SearchItem("222222", "作者作品二", ()),
+            ),
+        )
+
+        message = format_search_result(result, "/jm")
+
+        self.assertIn("作者「柊ぽぷら」作品", message)
+        self.assertIn("第 1 / 3 页", message)
+        self.assertIn("共 25 条", message)
+        self.assertIn("1. JM111111 作者作品一", message)
+        self.assertIn("标签：中文 / 全彩", message)
+        self.assertIn("2. JM222222 作者作品二", message)
+        self.assertIn("/jm 详情 111111", message)
+        self.assertIn("下一页：/jm 作者 柊ぽぷら 2", message)
+        self.assertNotIn("页数：", message)
+        self.assertNotIn("更新时间：", message)
+        self.assertNotIn("未知", message)
+
+    def test_format_empty_search_result_is_short_and_actionable(self):
+        result = SearchResult(
+            keyword="不存在",
+            kind="site",
+            page=1,
+            page_count=0,
+            total=0,
+            items=(),
+        )
+
+        message = format_search_result(result, "/jm")
+
+        self.assertIn("没有搜到「不存在」", message)
+        self.assertIn("换个关键词", message)
+        self.assertNotIn("未知", message)
 
     def test_admin_failed_formats_napcat_missing_mount_as_diagnosis(self):
         job = AlbumQueueJob(

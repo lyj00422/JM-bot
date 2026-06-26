@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from jmbot.core.catalog_service import AlbumDetail
+from jmbot.core.catalog_service import AlbumDetail, SearchResult
 from jmbot.core.persistent_queue import AlbumQueueJob
 
 
@@ -15,6 +15,8 @@ def format_help(command_prefix: str = "/jm") -> str:
             "JMbot 可用命令：",
             f"{prefix} 123456 - 加入下载队列",
             f"{prefix} 详情 123456 - 查看漫画详情",
+            f"{prefix} 搜索 关键词 - 搜索漫画",
+            f"{prefix} 作者 作者名 - 搜索作者作品",
             f"{prefix} 封面 123456 - 发送封面图片",
             f"{prefix} 预览 123456 - 上传前 10 页预览 PDF",
             f"{prefix} 123456 zip - 下载 ZIP",
@@ -67,6 +69,37 @@ def format_query_failed(query_name: str) -> str:
     """Return a safe query failure without exposing upstream details."""
 
     return f"{query_name}查询暂时不可用，请稍后重试。"
+
+
+def format_search_result(result: SearchResult, command_prefix: str = "/jm") -> str:
+    """Return compact search results without unreliable optional metadata."""
+
+    prefix = command_prefix
+    if not result.items:
+        query_type = f"作者「{result.keyword}」作品" if result.kind == "author" else f"「{result.keyword}」"
+        return f"没有搜到{query_type}，可以换个关键词再试。"
+
+    title = (
+        f"作者「{result.keyword}」作品"
+        if result.kind == "author"
+        else f"搜索「{result.keyword}」"
+    )
+    page_count = max(result.page_count, result.page)
+    total = max(result.total, len(result.items))
+    lines = [f"{title}：第 {result.page} / {page_count} 页，共 {total} 条"]
+    for index, item in enumerate(result.items, start=1):
+        title_suffix = f" {item.title}" if item.title and item.title != item.album_id else ""
+        lines.append(f"{index}. JM{item.album_id}{title_suffix}")
+        if item.tags:
+            lines.append(f"   标签：{' / '.join(item.tags[:6])}")
+
+    first_id = result.items[0].album_id
+    lines.append("")
+    lines.append(f"详情：{prefix} 详情 {first_id}；下载：{prefix} {first_id}")
+    if result.page < result.page_count:
+        command = "作者" if result.kind == "author" else "搜索"
+        lines.append(f"下一页：{prefix} {command} {result.keyword} {result.page + 1}")
+    return "\n".join(lines)
 
 
 def format_queue_summary(active_jobs: Sequence[AlbumQueueJob], *, limit: int = 10) -> str:

@@ -21,6 +21,7 @@ JmAction = Literal[
     "cover",
     "preview",
     "progress",
+    "search",
     "my_tasks",
     "history",
     "retry",
@@ -41,6 +42,9 @@ class JmMessage:
     failed_only: bool = False
     output_format: str = "pdf"
     chapters: tuple[int, ...] = ()
+    search_kind: str = "site"
+    keyword: str | None = None
+    page: int = 1
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -122,6 +126,14 @@ def parse_jm_message(
     if progress_match is not None:
         return JmMessage(action="progress", album_id=progress_match.group(1))
 
+    search_match = re.match(rf"^\s*{prefix}\s+(搜索|search|作者)\s+(.+?)\s*$", message, re.IGNORECASE)
+    if search_match is not None:
+        search_kind = "author" if search_match.group(1).lower() == "作者" else "site"
+        keyword, page = _parse_search_keyword_and_page(search_match.group(2))
+        if keyword is None:
+            return None
+        return JmMessage(action="search", search_kind=search_kind, keyword=keyword, page=page)
+
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")
 
@@ -171,3 +183,20 @@ def _parse_chapters(value: str) -> tuple[int, ...]:
         else:
             return ()
     return tuple(sorted(chapters))
+
+
+def _parse_search_keyword_and_page(value: str) -> tuple[str | None, int]:
+    text = value.strip()
+    if not text:
+        return None, 1
+
+    page = 1
+    page_match = re.match(r"^(.+?)\s+([0-9]+)\s*$", text)
+    if page_match is not None:
+        parsed_page = int(page_match.group(2))
+        if parsed_page < 1:
+            return None, 1
+        text = page_match.group(1).strip()
+        page = parsed_page
+
+    return (text, page) if text else (None, 1)
