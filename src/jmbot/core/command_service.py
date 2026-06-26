@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jmbot.core.catalog_service import AlbumDetail
+from jmbot.core.catalog_service import AlbumDetail, SearchKind, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_album_detail,
@@ -19,15 +19,17 @@ from jmbot.core.formatter import (
     format_retry_duplicate,
     format_retry_enqueued,
     format_retry_missing,
+    format_search_result,
     format_task_history,
 )
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 from jmbot.core.preview_service import CoverResult, PreviewResult
-from jmbot.core.query_executor import query_album_detail, query_cover, query_preview
+from jmbot.core.query_executor import query_album_detail, query_album_search, query_cover, query_preview
 
 
 LOGGER = logging.getLogger(__name__)
 DetailQuery = Callable[..., AlbumDetail]
+SearchQuery = Callable[..., SearchResult]
 CoverQuery = Callable[..., CoverResult]
 PreviewQuery = Callable[..., PreviewResult]
 MediaDeliverer = Callable[[Path], Awaitable[None]]
@@ -88,6 +90,34 @@ async def query_album_detail_message(
 
     cache.put(detail)
     return format_album_detail(detail, command_prefix)
+
+
+async def query_album_search_message(
+    keyword: str,
+    *,
+    kind: SearchKind,
+    page: int,
+    semaphore: asyncio.Semaphore,
+    timeout_seconds: int,
+    command_prefix: str = "/jm",
+    query_func: SearchQuery = query_album_search,
+) -> str:
+    """Fetch and format album search results without blocking the event loop."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                keyword,
+                kind=kind,
+                page=page,
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        LOGGER.exception("Album search query failed for %s page %s kind %s", keyword, page, kind)
+        return format_query_failed("搜索")
+
+    return format_search_result(result, command_prefix)
 
 
 async def deliver_cover(

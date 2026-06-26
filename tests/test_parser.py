@@ -163,9 +163,39 @@ class ParseJmCommandTest(unittest.TestCase):
         self.assertEqual(result.action, "progress")
         self.assertEqual(result.album_id, "123456")
 
-    def test_removed_search_commands_are_not_parsed(self):
-        self.assertIsNone(parse_jm_message("/jm 搜索 测试关键词"))
-        self.assertIsNone(parse_jm_message("/jm search keyword"))
+    def test_parse_search_commands(self):
+        cases = [
+            ("/jm 搜索 测试关键词", "site", "测试关键词", 1),
+            ("/jm 搜索 测试关键词 2", "site", "测试关键词", 2),
+            ("/jm search english keyword 3", "site", "english keyword", 3),
+            ("/jm 作者 柊ぽぷら", "author", "柊ぽぷら", 1),
+            ("/jm 作者 柊ぽぷら 2", "author", "柊ぽぷら", 2),
+        ]
+
+        for message, search_kind, keyword, page in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "search")
+                self.assertEqual(result.search_kind, search_kind)
+                self.assertEqual(result.keyword, keyword)
+                self.assertEqual(result.page, page)
+
+    def test_parse_search_numeric_keyword_is_not_treated_as_page(self):
+        result = parse_jm_message("/jm 搜索 271673")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "search")
+        self.assertEqual(result.keyword, "271673")
+        self.assertEqual(result.page, 1)
+
+    def test_parse_rejects_empty_or_invalid_search(self):
+        self.assertIsNone(parse_jm_message("/jm 搜索"))
+        self.assertIsNone(parse_jm_message("/jm 搜索 测试 0"))
+        self.assertIsNone(parse_jm_message("/jm 作者"))
+
+    def test_removed_download_pagination_command_is_not_parsed(self):
         self.assertIsNone(parse_jm_message("/jm 下载 2"))
 
     def test_parse_admin_commands(self):

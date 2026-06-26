@@ -14,12 +14,13 @@ from jmbot.core.command_service import (
     deliver_cover,
     deliver_preview,
     query_album_detail_message,
+    query_album_search_message,
     my_tasks_summary,
     progress_summary,
     retry_failed_album,
     task_history,
 )
-from jmbot.core.catalog_service import AlbumDetail
+from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.persistent_queue import PersistentAlbumQueue
@@ -257,6 +258,51 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(message, "详情查询暂时不可用，请稍后重试。")
+        self.assertNotIn("secret", message)
+
+    async def test_search_query_returns_formatted_results(self):
+        semaphore = asyncio.Semaphore(1)
+        calls = []
+
+        def query(keyword, *, kind, page, timeout_seconds):
+            calls.append((keyword, kind, page, timeout_seconds))
+            return SearchResult(
+                keyword,
+                kind,
+                page,
+                2,
+                12,
+                (SearchItem("111111", "搜索结果", ("中文",)),),
+            )
+
+        message = await query_album_search_message(
+            "测试",
+            kind="site",
+            page=2,
+            semaphore=semaphore,
+            timeout_seconds=20,
+            command_prefix="/jm",
+            query_func=query,
+        )
+
+        self.assertEqual(calls, [("测试", "site", 2, 20)])
+        self.assertIn("搜索「测试」", message)
+        self.assertIn("JM111111 搜索结果", message)
+
+    async def test_search_failure_returns_safe_message(self):
+        def query(keyword, *, kind, page, timeout_seconds):
+            raise RuntimeError("secret upstream failure")
+
+        message = await query_album_search_message(
+            "测试",
+            kind="author",
+            page=1,
+            semaphore=asyncio.Semaphore(1),
+            timeout_seconds=20,
+            query_func=query,
+        )
+
+        self.assertEqual(message, "搜索查询暂时不可用，请稍后重试。")
         self.assertNotIn("secret", message)
 
     async def test_deliver_cover_sends_image_and_cleans_media_dir(self):

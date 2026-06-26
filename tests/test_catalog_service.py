@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from jmbot.core.catalog_service import get_album_detail
+from jmbot.core.catalog_service import get_album_detail, search_albums
 
 
 class FakeClient:
@@ -21,6 +21,27 @@ class FakeClient:
                 ("1002", "2", "第二话"),
             ],
             update_date="2026-06-25",
+        )
+
+    def search_site(self, keyword, page=1):
+        self.search_call = ("site", keyword, page)
+        return SimpleNamespace(
+            content=[
+                ("111111", {"name": "普通搜索结果", "tags": ["中文", "NTR"]}),
+                ("222222", {"name": "无标签结果"}),
+            ],
+            total=22,
+            page_count=3,
+        )
+
+    def search_author(self, keyword, page=1):
+        self.search_call = ("author", keyword, page)
+        return SimpleNamespace(
+            content=[
+                ("333333", {"name": "作者作品", "tags": ["全彩"]}),
+            ],
+            total=1,
+            page_count=1,
         )
 
 
@@ -67,6 +88,38 @@ class CatalogServiceTest(unittest.TestCase):
 
         self.assertIsNone(detail.page_count)
         self.assertIsNone(detail.update_time)
+
+    def test_search_albums_uses_site_search_and_normalizes_items(self):
+        client = FakeClient()
+
+        result = search_albums("测试", page=2, kind="site", client=client)
+
+        self.assertEqual(client.search_call, ("site", "测试", 2))
+        self.assertEqual(result.keyword, "测试")
+        self.assertEqual(result.kind, "site")
+        self.assertEqual(result.page, 2)
+        self.assertEqual(result.total, 22)
+        self.assertEqual(result.page_count, 3)
+        self.assertEqual(result.items[0].album_id, "111111")
+        self.assertEqual(result.items[0].title, "普通搜索结果")
+        self.assertEqual(result.items[0].tags, ("中文", "NTR"))
+        self.assertEqual(result.items[1].tags, ())
+
+    def test_search_albums_uses_author_search(self):
+        client = FakeClient()
+
+        result = search_albums("柊ぽぷら", page=1, kind="author", client=client)
+
+        self.assertEqual(client.search_call, ("author", "柊ぽぷら", 1))
+        self.assertEqual(result.kind, "author")
+        self.assertEqual(result.items[0].title, "作者作品")
+
+    def test_search_albums_rejects_invalid_page_and_kind(self):
+        with self.assertRaises(ValueError):
+            search_albums("测试", page=0, client=FakeClient())
+
+        with self.assertRaises(ValueError):
+            search_albums("测试", kind="tag", client=FakeClient())
 
 
 if __name__ == "__main__":

@@ -3,10 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from jmbot.core.catalog_service import AlbumDetail
+from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.query_executor import (
     QueryTimeoutError,
     query_album_detail,
+    query_album_search,
     query_cover,
     query_preview,
     run_query_with_timeout,
@@ -52,6 +53,24 @@ class QueryExecutorTest(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertEqual(run_query.call_args.args[1:], ("123456",))
         self.assertEqual(run_query.call_args.kwargs, {"timeout_seconds": 20})
+
+    @patch("jmbot.core.query_executor.run_query_with_timeout")
+    def test_search_wrapper_uses_isolated_executor(self, run_query):
+        expected = SearchResult(
+            "测试",
+            "site",
+            2,
+            3,
+            22,
+            (SearchItem("111111", "标题", ()),),
+        )
+        run_query.return_value = expected
+
+        result = query_album_search("测试", kind="site", page=2, timeout_seconds=20)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(run_query.call_args.args[1:], ("测试",))
+        self.assertEqual(run_query.call_args.kwargs, {"kind": "site", "page": 2, "timeout_seconds": 20})
 
     @patch("jmbot.core.query_executor.run_query_with_timeout")
     def test_cover_wrapper_uses_isolated_executor(self, run_query):

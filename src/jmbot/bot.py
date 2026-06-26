@@ -21,6 +21,7 @@ from jmbot.core.command_service import (
     my_tasks_summary,
     progress_summary,
     query_album_detail_message,
+    query_album_search_message,
     queue_summary,
     retry_failed_album,
     task_history,
@@ -226,6 +227,20 @@ async def _handle_parsed_command(
                 mode=CONFIG.progress_mode,
             )
         )
+        return False
+
+    if command.action == "search":
+        if command.keyword is None:
+            return False
+        message = await query_album_search_message(
+            command.keyword,
+            kind=command.search_kind,
+            page=command.page,
+            semaphore=QUERY_SEMAPHORE,
+            timeout_seconds=CONFIG.query_timeout_seconds,
+            command_prefix=CONFIG.command_prefix,
+        )
+        await jm_matcher.send(message)
         return False
 
     if command.action == "my_tasks":
