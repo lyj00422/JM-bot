@@ -94,7 +94,7 @@ async def process_next_album_job(
 
         queue.mark_failed(job.id, str(exc))
         LOGGER.exception("JM%s queue job %s failed after %.1f seconds", job.album_id, job.id, time.monotonic() - started)
-        await _notify_safely(notify, job, format_task_failed(job.album_id))
+        await _notify_safely(notify, job, format_task_failed(job.album_id, str(exc)))
     else:
         LOGGER.info("Finished JM%s queue job %s in %.1f seconds", job.album_id, job.id, time.monotonic() - started)
         await _notify_safely(notify, job, format_task_uploaded(job.album_id, output_names))

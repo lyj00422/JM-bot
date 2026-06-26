@@ -162,9 +162,12 @@ def format_task_canceled(album_id: str) -> str:
     return f"JM{album_id} 已取消，不再上传。"
 
 
-def format_task_failed(album_id: str) -> str:
+def format_task_failed(album_id: str, error: str | None = None) -> str:
     """Return a friendly failure message without exposing raw exception text."""
 
+    reason = _format_public_failure_reason(error)
+    if reason is not None:
+        return f"JM{album_id} 处理失败：{reason}"
     return f"JM{album_id} 处理失败，请稍后重试或联系管理员查看原因。"
 
 
@@ -233,4 +236,16 @@ def format_admin_failed_tasks(jobs: Sequence[AlbumQueueJob]) -> str:
 def _format_admin_error(error: str) -> str:
     if "ENOENT" in error and "/opt/jmbot/data/output/" in error:
         return "NapCat 无法访问输出文件，请检查 /opt/jmbot 挂载并重建 NapCat 容器"
-    return error
+    public_reason = _format_public_failure_reason(error)
+    if public_reason is not None:
+        return public_reason
+    first_line = error.strip().splitlines()[0] if error.strip() else "未知错误"
+    return first_line[:160]
+
+
+def _format_public_failure_reason(error: str | None) -> str | None:
+    if not error:
+        return None
+    if "MissingAlbumPhotoException" in error or "请求的本子不存在" in error:
+        return "本子不存在或仅登录用户可见，请检查 ID；如果 ID 没错，可能需要配置 jmcomic cookies。"
+    return None
