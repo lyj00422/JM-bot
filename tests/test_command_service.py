@@ -15,6 +15,7 @@ from jmbot.core.command_service import (
     deliver_preview,
     query_album_detail_message,
     my_tasks_summary,
+    progress_summary,
     retry_failed_album,
     task_history,
 )
@@ -25,6 +26,59 @@ from jmbot.core.persistent_queue import PersistentAlbumQueue
 
 
 class CommandServiceTest(unittest.TestCase):
+    def test_enqueue_album_request_persists_format_and_chapters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+
+            message = enqueue_album_request(
+                queue,
+                "111111",
+                target,
+                output_format="zip",
+                chapters=(1, 3),
+            )
+            job = queue.list_jobs()[0]
+
+        self.assertIn("ZIP", message)
+        self.assertEqual(job.output_format, "zip")
+        self.assertEqual(job.chapters, (1, 3))
+
+    def test_progress_summary_is_scoped_to_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="group", group_id=10001, user_id=42)
+            other = QueueTarget(destination_type="group", group_id=10002, user_id=42)
+            job = queue.enqueue_group("111111", group_id=10001, user_id=99)
+            queue.update_progress(job.id, stage="downloading", current=3, total=10)
+
+            visible = progress_summary(queue, "111111", target, mode="precise")
+            hidden = progress_summary(queue, "111111", other, mode="precise")
+
+        self.assertIn("3 / 10", visible)
+        self.assertIn("没有找到", hidden)
+
+    def test_progress_summary_lists_all_variants_and_hides_counts_in_stage_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+            pdf_job = queue.enqueue_private("111111", user_id=42)
+            zip_job = queue.enqueue_private(
+                "111111",
+                user_id=42,
+                output_format="zip",
+                chapters=(1, 3),
+            )
+            queue.update_progress(pdf_job.id, stage="downloading", current=3, total=10)
+            queue.update_progress(zip_job.id, stage="building", current=5, total=5)
+
+            message = progress_summary(queue, "111111", target, mode="stage")
+
+        self.assertIn("PDF 全部章节", message)
+        self.assertIn("ZIP 章节1,3", message)
+        self.assertNotIn("3 / 10", message)
+        self.assertNotIn("5 / 5", message)
+
     def test_enqueue_duplicate_reports_existing_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
@@ -65,6 +119,20 @@ class CommandServiceTest(unittest.TestCase):
         self.assertIn("已取消 1 个", killed_all)
         self.assertIn("已插队", jump_message)
         self.assertIn("已清空", clear_message)
+
+    def test_admin_jump_finds_non_default_format_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+            zip_job = queue.enqueue_private("111111", user_id=42, output_format="zip")
+
+            message = admin_jump_album(queue, "111111", target)
+            jobs = queue.list_jobs()
+
+        self.assertIn("已插队", message)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].id, zip_job.id)
+        self.assertEqual(jobs[0].output_format, "zip")
 
     def test_my_tasks_summary_only_shows_current_user_context(self):
         with tempfile.TemporaryDirectory() as tmp:

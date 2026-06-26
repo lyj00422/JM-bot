@@ -31,6 +31,27 @@ class RecoveryTest(unittest.TestCase):
         self.assertFalse(album_exists)
         self.assertTrue(cached_pdf_exists)
 
+    def test_recover_interrupted_variant_job_cleans_its_isolated_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue = PersistentAlbumQueue(root / "queue.sqlite3")
+            queued = queue.enqueue_private(
+                "111111",
+                user_id=42,
+                output_format="zip",
+                chapters=(1, 3),
+            )
+            queue.claim_next()
+            album_dir = root / "downloads" / "111111__ch1-3_zip"
+            album_dir.mkdir(parents=True)
+            (album_dir / "001.jpg").write_bytes(b"image")
+
+            recovered = recover_interrupted_jobs(queue, root / "downloads")
+            album_exists = album_dir.exists()
+
+        self.assertEqual([job.id for job in recovered], [queued.id])
+        self.assertFalse(album_exists)
+
 
 if __name__ == "__main__":
     unittest.main()

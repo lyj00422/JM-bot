@@ -7,7 +7,7 @@ from multiprocessing.connection import wait
 from pathlib import Path
 from typing import Any, TypeVar
 
-from jmbot.core.jm_service import AlbumJobResult, DownloadSettings, run_album_job
+from jmbot.core.jm_service import AlbumJobResult, DownloadRequest, DownloadSettings, run_album_job
 
 
 T = TypeVar("T")
@@ -66,7 +66,7 @@ def run_with_timeout(
 
 
 def run_album_job_with_timeout(
-    album_id: str,
+    request: str | DownloadRequest,
     download_settings: DownloadSettings,
     output_root: str | Path,
     *,
@@ -76,7 +76,7 @@ def run_album_job_with_timeout(
 
     return run_with_timeout(
         run_album_job,
-        album_id,
+        request,
         download_settings,
         output_root,
         timeout_seconds=timeout_seconds,

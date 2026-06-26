@@ -6,6 +6,50 @@ from jmbot.core.persistent_queue import DuplicateAlbumJobError, PersistentAlbumQ
 
 
 class PersistentAlbumQueueTest(unittest.TestCase):
+    def test_new_jobs_persist_format_chapters_and_progress_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+
+            job = queue.enqueue_private(
+                "123456",
+                user_id=42,
+                output_format="zip",
+                chapters=(1, 3, 4),
+            )
+
+        self.assertEqual(job.output_format, "zip")
+        self.assertEqual(job.chapters, (1, 3, 4))
+        self.assertEqual(job.stage, "queued")
+        self.assertEqual(job.progress_current, 0)
+        self.assertEqual(job.progress_total, 0)
+        self.assertIsNone(job.started_at)
+
+    def test_duplicate_identity_includes_format_and_chapters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queue.enqueue_private("123456", user_id=42, output_format="pdf", chapters=())
+            queue.enqueue_private("123456", user_id=42, output_format="zip", chapters=())
+            queue.enqueue_private("123456", user_id=42, output_format="pdf", chapters=(1,))
+
+            with self.assertRaises(DuplicateAlbumJobError):
+                queue.enqueue_private("123456", user_id=42, output_format="pdf", chapters=(1,))
+
+            jobs = queue.list_jobs()
+
+        self.assertEqual(len(jobs), 3)
+
+    def test_updates_stage_and_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            job = queue.enqueue_private("123456", user_id=42)
+
+            queue.update_progress(job.id, stage="downloading", current=3, total=10)
+            updated = queue.list_jobs()[0]
+
+        self.assertEqual(updated.stage, "downloading")
+        self.assertEqual(updated.progress_current, 3)
+        self.assertEqual(updated.progress_total, 10)
+
     def test_enqueues_group_and_private_jobs_in_created_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

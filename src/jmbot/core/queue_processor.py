@@ -15,7 +15,7 @@ from jmbot.core.jm_service import AlbumJobResult
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 
 
-RunAlbumJob = Callable[[str], Awaitable[AlbumJobResult]]
+RunAlbumJob = Callable[[AlbumQueueJob], Awaitable[AlbumJobResult]]
 GroupUploader = Callable[[int, Path], Awaitable[None]]
 PrivateUploader = Callable[[int, Path], Awaitable[None]]
 Notifier = Callable[[AlbumQueueJob, str], Awaitable[None]]
@@ -44,7 +44,8 @@ async def process_next_album_job(
     LOGGER.info("Starting JM%s queue job %s for %s", job.album_id, job.id, job.destination_type)
     try:
         await _notify_safely(notify, job, format_task_started(job.album_id))
-        result = await run_job(job.album_id)
+        queue.update_progress(job.id, stage="downloading")
+        result = await run_job(job)
         output_paths = result.output_paths
         output_names = ", ".join(path.name for path in output_paths)
         LOGGER.info("Built JM%s PDF(s) for queue job %s: %s", job.album_id, job.id, output_names)
@@ -55,6 +56,7 @@ async def process_next_album_job(
             await _notify_safely(notify, job, format_task_canceled(job.album_id))
             return True
 
+        queue.update_progress(job.id, stage="uploading")
         if job.destination_type == "group":
             if job.group_id is None:
                 raise ValueError(f"Group job {job.id} is missing group_id")

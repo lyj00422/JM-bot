@@ -114,6 +114,55 @@ class ParseJmCommandTest(unittest.TestCase):
                 self.assertEqual(result.action, "preview")
                 self.assertEqual(result.album_id, "123456")
 
+    def test_parse_download_format_commands(self):
+        cases = [
+            ("/jm 123456", "pdf"),
+            ("/jm 123456 pdf", "pdf"),
+            ("/jm 123456 zip", "zip"),
+        ]
+        for message, output_format in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "request")
+                self.assertEqual(result.album_id, "123456")
+                self.assertEqual(result.output_format, output_format)
+                self.assertEqual(result.chapters, ())
+
+    def test_parse_uses_configured_default_format_when_format_is_omitted(self):
+        result = parse_jm_message("/jm 123456", default_format="zip")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.output_format, "zip")
+
+    def test_parse_chapter_selection_commands(self):
+        cases = [
+            ("/jm 123456 章节 1", (1,), "pdf"),
+            ("/jm 123456 章节 1,3,5", (1, 3, 5), "pdf"),
+            ("/jm 123456 章节 2-5", (2, 3, 4, 5), "pdf"),
+            ("/jm 123456 章节 1,3-5 zip", (1, 3, 4, 5), "zip"),
+        ]
+        for message, chapters, output_format in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "request")
+                self.assertEqual(result.album_id, "123456")
+                self.assertEqual(result.chapters, chapters)
+                self.assertEqual(result.output_format, output_format)
+
+    def test_parse_rejects_invalid_chapter_selection(self):
+        self.assertIsNone(parse_jm_message("/jm 123456 章节 0"))
+        self.assertIsNone(parse_jm_message("/jm 123456 章节 5-2"))
+        self.assertIsNone(parse_jm_message("/jm 123456 rar"))
+
+    def test_parse_progress_command(self):
+        result = parse_jm_message("/jm 进度 123456")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "progress")
+        self.assertEqual(result.album_id, "123456")
+
     def test_removed_search_commands_are_not_parsed(self):
         self.assertIsNone(parse_jm_message("/jm 搜索 测试关键词"))
         self.assertIsNone(parse_jm_message("/jm search keyword"))

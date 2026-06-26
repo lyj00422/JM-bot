@@ -20,6 +20,7 @@ JmAction = Literal[
     "detail",
     "cover",
     "preview",
+    "progress",
     "my_tasks",
     "history",
     "retry",
@@ -38,6 +39,8 @@ class JmMessage:
     album_id: str | None = None
     all_targets: bool = False
     failed_only: bool = False
+    output_format: str = "pdf"
+    chapters: tuple[int, ...] = ()
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -51,14 +54,47 @@ def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | N
     return JmCommand(album_id=match.group(1))
 
 
-def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | None:
+def parse_jm_message(
+    message: str,
+    command_prefix: str = "/jm",
+    *,
+    default_format: str = "pdf",
+) -> JmMessage | None:
     """Parse JM request, user queue commands, and Chinese admin subcommands."""
 
-    request = parse_jm_command(message, command_prefix)
-    if request is not None:
-        return JmMessage(action="request", album_id=request.album_id)
+    normalized_default = default_format.lower()
+    if normalized_default not in {"pdf", "zip"}:
+        raise ValueError(f"Unsupported default format: {default_format}")
 
     prefix = re.escape(command_prefix)
+    download_match = re.match(
+        rf"^\s*{prefix}\s+([0-9]+)(?:\s+(pdf|zip))?\s*$",
+        message,
+        re.IGNORECASE,
+    )
+    if download_match is not None:
+        return JmMessage(
+            action="request",
+            album_id=download_match.group(1),
+            output_format=(download_match.group(2) or normalized_default).lower(),
+        )
+
+    chapter_match = re.match(
+        rf"^\s*{prefix}\s+([0-9]+)\s+章节\s+([0-9,\-\s]+?)(?:\s+(pdf|zip))?\s*$",
+        message,
+        re.IGNORECASE,
+    )
+    if chapter_match is not None:
+        chapters = _parse_chapters(chapter_match.group(2))
+        if not chapters:
+            return None
+        return JmMessage(
+            action="request",
+            album_id=chapter_match.group(1),
+            output_format=(chapter_match.group(3) or normalized_default).lower(),
+            chapters=chapters,
+        )
+
     patterns: list[tuple[str, JmAction, bool]] = [
         (rf"^\s*{prefix}\s+撤回\s+([0-9]+)\s*$", "cancel", False),
         (rf"^\s*{prefix}\s+管理\s+kill\s+全部\s+([0-9]+)\s*$", "admin_kill", True),
@@ -81,6 +117,10 @@ def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | N
     preview_match = re.match(rf"^\s*{prefix}\s+(?:预览|preview)\s+([0-9]+)\s*$", message, re.IGNORECASE)
     if preview_match is not None:
         return JmMessage(action="preview", album_id=preview_match.group(1))
+
+    progress_match = re.match(rf"^\s*{prefix}\s+进度\s+([0-9]+)\s*$", message, re.IGNORECASE)
+    if progress_match is not None:
+        return JmMessage(action="progress", album_id=progress_match.group(1))
 
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")
@@ -108,3 +148,26 @@ def parse_jm_message(message: str, command_prefix: str = "/jm") -> JmMessage | N
         return JmMessage(action="admin_failed")
 
     return None
+
+
+def _parse_chapters(value: str) -> tuple[int, ...]:
+    chapters: set[int] = set()
+    for raw_part in value.replace(" ", "").split(","):
+        if not raw_part:
+            return ()
+        if "-" in raw_part:
+            bounds = raw_part.split("-", 1)
+            if len(bounds) != 2 or not all(bound.isdigit() for bound in bounds):
+                return ()
+            start, end = map(int, bounds)
+            if start < 1 or end < start:
+                return ()
+            chapters.update(range(start, end + 1))
+        elif raw_part.isdigit():
+            chapter = int(raw_part)
+            if chapter < 1:
+                return ()
+            chapters.add(chapter)
+        else:
+            return ()
+    return tuple(sorted(chapters))

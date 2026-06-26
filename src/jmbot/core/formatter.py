@@ -17,6 +17,9 @@ def format_help(command_prefix: str = "/jm") -> str:
             f"{prefix} 详情 123456 - 查看漫画详情",
             f"{prefix} 封面 123456 - 发送封面图片",
             f"{prefix} 预览 123456 - 上传前 10 页预览 PDF",
+            f"{prefix} 123456 zip - 下载 ZIP",
+            f"{prefix} 123456 章节 1,3-5 - 下载指定章节",
+            f"{prefix} 进度 123456 - 查看任务进度",
             f"{prefix} 撤回 123456 - 撤回自己的排队任务",
             f"{prefix} 队列 - 查看当前队列",
             f"{prefix} 我的 - 查看自己的当前任务",
@@ -49,7 +52,11 @@ def format_album_detail(detail: AlbumDetail, command_prefix: str = "/jm") -> str
     if detail.tags:
         lines.append(f"标签：{' / '.join(detail.tags[:10])}")
     if detail.chapters:
-        lines.append(f"章节：{'、'.join(detail.chapters[:10])}")
+        chapters = "、".join(
+            f"{index}. {title}"
+            for index, title in enumerate(detail.chapters[:10], start=1)
+        )
+        lines.append(f"章节：{chapters}")
     if detail.update_time is not None:
         lines.append(f"更新时间：{detail.update_time}")
     lines.extend(["", f"发送 {command_prefix} {detail.album_id} 加入下载队列"])

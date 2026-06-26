@@ -41,9 +41,10 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("/jm 详情 123456", message)
         self.assertIn("/jm 封面 123456", message)
         self.assertIn("/jm 预览 123456", message)
+        self.assertIn("/jm 123456 zip", message)
+        self.assertIn("/jm 进度 123456", message)
         self.assertNotIn("搜索", message)
         self.assertNotIn("/jm 下载 1", message)
-        self.assertNotIn("zip", message.lower())
 
     def test_format_album_detail_limits_tags_and_chapters(self):
         detail = AlbumDetail(
