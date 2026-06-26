@@ -36,6 +36,9 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_QUERY_CACHE_MAX_ENTRIES": "64",
                 "JM_BOT_PREVIEW_PAGE_COUNT": "8",
                 "JM_BOT_PREVIEW_TIMEOUT_SECONDS": "120",
+                "JM_BOT_DEFAULT_FORMAT": "zip",
+                "JM_BOT_ALLOWED_FORMATS": "pdf,zip",
+                "JM_BOT_PROGRESS_MODE": "precise",
                 "JM_BOT_ALLOWED_GROUPS": "10001,10002",
                 "JM_BOT_SUPERUSERS": "42",
                 "JM_BOT_CLEAN_AFTER_UPLOAD": "false",
@@ -64,6 +67,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.query_cache_max_entries, 64)
         self.assertEqual(config.preview_page_count, 8)
         self.assertEqual(config.preview_timeout_seconds, 120)
+        self.assertEqual(config.default_format, "zip")
+        self.assertEqual(config.allowed_formats, {"pdf", "zip"})
+        self.assertEqual(config.progress_mode, "precise")
         self.assertEqual(config.allowed_group_ids, {10001, 10002})
         self.assertEqual(config.superuser_ids, {42})
         self.assertFalse(config.clean_after_upload)
@@ -90,6 +96,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.preview_root, Path("data/preview"))
         self.assertEqual(config.preview_page_count, 10)
         self.assertEqual(config.preview_timeout_seconds, 180)
+        self.assertEqual(config.default_format, "pdf")
+        self.assertEqual(config.allowed_formats, {"pdf", "zip"})
+        self.assertEqual(config.progress_mode, "stage")
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [
@@ -104,6 +113,9 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_QUERY_CACHE_MAX_ENTRIES": "0"},
             {"JM_BOT_PREVIEW_PAGE_COUNT": "0"},
             {"JM_BOT_PREVIEW_TIMEOUT_SECONDS": "0"},
+            {"JM_BOT_DEFAULT_FORMAT": "rar"},
+            {"JM_BOT_ALLOWED_FORMATS": "pdf,rar"},
+            {"JM_BOT_PROGRESS_MODE": "verbose"},
         ]
 
         for env in invalid_cases:

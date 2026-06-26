@@ -5,6 +5,7 @@ import logging
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from jmbot.core.catalog_service import AlbumDetail
@@ -41,17 +42,26 @@ class QueueTarget:
     user_id: int
 
 
-def enqueue_album_request(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget) -> str:
+def enqueue_album_request(
+    queue: PersistentAlbumQueue,
+    album_id: str,
+    target: QueueTarget,
+    *,
+    output_format: str = "pdf",
+    chapters: tuple[int, ...] = (),
+) -> str:
     """Enqueue a normal album request and return a user-facing reply."""
 
     try:
-        job = _enqueue(queue, album_id, target)
+        job = _enqueue(queue, album_id, target, output_format=output_format, chapters=chapters)
     except DuplicateAlbumJobError as exc:
         ahead_count = queue.count_ahead(exc.existing_job.id)
         return f"JM{album_id} 已经在队列中，前面还有{ahead_count}篇漫画正在处理。"
 
     ahead_count = queue.count_ahead(job.id)
-    return f"收到 JM{album_id}，已加入队列，前面还有{ahead_count}篇漫画正在处理。"
+    format_label = output_format.upper()
+    chapter_label = f"，章节 {','.join(map(str, chapters))}" if chapters else ""
+    return f"收到 JM{album_id}（{format_label}{chapter_label}），已加入队列，前面还有{ahead_count}篇漫画正在处理。"
 
 
 async def query_album_detail_message(
@@ -195,7 +205,13 @@ def retry_failed_album(queue: PersistentAlbumQueue, album_id: str, target: Queue
         return format_retry_missing(album_id)
 
     try:
-        job = _enqueue(queue, album_id, target)
+        job = _enqueue(
+            queue,
+            album_id,
+            target,
+            output_format=failed.output_format,
+            chapters=failed.chapters,
+        )
     except DuplicateAlbumJobError as exc:
         job = exc.existing_job
         return format_retry_duplicate(album_id, queue.count_ahead(job.id))
@@ -253,10 +269,73 @@ def admin_jump_album(queue: PersistentAlbumQueue, album_id: str, target: QueueTa
     return f"JM{album_id} 已插队，任务 #{moved.id} 会优先处理。"
 
 
-def _enqueue(queue: PersistentAlbumQueue, album_id: str, target: QueueTarget):
+def progress_summary(
+    queue: PersistentAlbumQueue,
+    album_id: str,
+    target: QueueTarget,
+    *,
+    mode: str,
+) -> str:
+    jobs = [
+        job
+        for job in queue.list_jobs()
+        if job.album_id == album_id
+        and job.status in {"pending", "processing"}
+        and job.destination_type == target.destination_type
+        and (
+            (target.destination_type == "group" and job.group_id == target.group_id)
+            or (target.destination_type == "private" and job.user_id == target.user_id)
+        )
+    ]
+    if not jobs:
+        return f"没有找到当前上下文中的 JM{album_id} 活动任务。"
+
+    lines = [f"JM{album_id} 当前进度："]
+    for index, job in enumerate(jobs, start=1):
+        stage_labels = {
+            "queued": "排队中",
+            "starting": "准备中",
+            "downloading": "下载图片",
+            "building": f"生成 {job.output_format.upper()}",
+            "uploading": "上传中",
+        }
+        chapter_label = f" 章节{','.join(map(str, job.chapters))}" if job.chapters else " 全部章节"
+        lines.append(f"{index}. {job.output_format.upper()}{chapter_label}")
+        lines.append(f"   阶段：{stage_labels.get(job.stage, job.stage)}")
+        if mode == "precise" and job.progress_total > 0:
+            lines.append(f"   已完成：{job.progress_current} / {job.progress_total} 页")
+        elif mode == "precise" and job.progress_current > 0:
+            lines.append(f"   已下载：{job.progress_current} 页")
+        if job.started_at:
+            started = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
+            seconds = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+            minutes, seconds = divmod(seconds, 60)
+            lines.append(f"   已运行：{minutes} 分 {seconds} 秒")
+    return "\n".join(lines)
+
+
+def _enqueue(
+    queue: PersistentAlbumQueue,
+    album_id: str,
+    target: QueueTarget,
+    *,
+    output_format: str = "pdf",
+    chapters: tuple[int, ...] = (),
+):
     if target.destination_type == "group":
         if target.group_id is None:
             raise ValueError("group_id is required for group target")
-        return queue.enqueue_group(album_id, group_id=target.group_id, user_id=target.user_id)
+        return queue.enqueue_group(
+            album_id,
+            group_id=target.group_id,
+            user_id=target.user_id,
+            output_format=output_format,
+            chapters=chapters,
+        )
 
-    return queue.enqueue_private(album_id, user_id=target.user_id)
+    return queue.enqueue_private(
+        album_id,
+        user_id=target.user_id,
+        output_format=output_format,
+        chapters=chapters,
+    )

@@ -19,6 +19,7 @@ from jmbot.core.command_service import (
     deliver_preview,
     enqueue_album_request,
     my_tasks_summary,
+    progress_summary,
     query_album_detail_message,
     queue_summary,
     retry_failed_album,
@@ -27,7 +28,8 @@ from jmbot.core.command_service import (
 from jmbot.core.cleanup import cleanup_album_files
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import format_help
-from jmbot.core.jm_service import DownloadSettings
+from jmbot.core.jm_service import DownloadRequest, DownloadSettings, download_directory_for_request
+from jmbot.core.pdf_builder import collect_images
 from jmbot.core.job_executor import run_album_job_with_timeout
 from jmbot.core.message_scope import is_friend_private_message
 from jmbot.core.parser import JmMessage, parse_jm_message
@@ -52,6 +54,7 @@ DOWNLOAD_SETTINGS = DownloadSettings(
     jmcomic_retry_times=CONFIG.jmcomic_retry_times,
     auto_split_pdf=CONFIG.auto_split_pdf,
     split_image_count=CONFIG.split_image_count,
+    progress_mode=CONFIG.progress_mode,
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 DETAIL_CACHE = DetailCache(
@@ -82,7 +85,14 @@ async def _start_queue_worker_on_connect(bot: Bot) -> None:
 async def _is_jm_command(event: MessageEvent) -> bool:
     """Return True when the incoming QQ message is a JM command."""
 
-    return parse_jm_message(event.get_plaintext(), CONFIG.command_prefix) is not None
+    return (
+        parse_jm_message(
+            event.get_plaintext(),
+            CONFIG.command_prefix,
+            default_format=CONFIG.default_format,
+        )
+        is not None
+    )
 
 
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
@@ -101,7 +111,11 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         await jm_matcher.finish("这个群还没有启用 JM 下载功能。")
         return
 
-    command = parse_jm_message(event.get_plaintext(), CONFIG.command_prefix)
+    command = parse_jm_message(
+        event.get_plaintext(),
+        CONFIG.command_prefix,
+        default_format=CONFIG.default_format,
+    )
     if command is None:
         return
 
@@ -123,7 +137,18 @@ async def _handle_parsed_command(
     if command.action == "request":
         if command.album_id is None:
             return False
-        await jm_matcher.send(enqueue_album_request(ALBUM_QUEUE, command.album_id, target))
+        if command.output_format not in CONFIG.allowed_formats:
+            await jm_matcher.send(f"当前不支持 {command.output_format.upper()} 格式。")
+            return False
+        await jm_matcher.send(
+            enqueue_album_request(
+                ALBUM_QUEUE,
+                command.album_id,
+                target,
+                output_format=command.output_format,
+                chapters=command.chapters,
+            )
+        )
         return True
 
     if command.action == "cancel":
@@ -188,6 +213,19 @@ async def _handle_parsed_command(
             timeout_seconds=CONFIG.preview_timeout_seconds,
         )
         await jm_matcher.send(message)
+        return False
+
+    if command.action == "progress":
+        if command.album_id is None:
+            return False
+        await jm_matcher.send(
+            progress_summary(
+                ALBUM_QUEUE,
+                command.album_id,
+                target,
+                mode=CONFIG.progress_mode,
+            )
+        )
         return False
 
     if command.action == "my_tasks":
@@ -280,13 +318,7 @@ async def _drain_album_queue(bot: Bot) -> None:
     while True:
         processed = await process_next_album_job(
             ALBUM_QUEUE,
-            run_job=lambda album_id: asyncio.to_thread(
-                run_album_job_with_timeout,
-                album_id,
-                DOWNLOAD_SETTINGS,
-                CONFIG.output_root,
-                timeout_seconds=CONFIG.job_timeout_seconds,
-            ),
+            run_job=_run_queued_album_job,
             upload_group=lambda group_id, pdf_path: upload_group_pdf(
                 bot, group_id, pdf_path, CONFIG.group_folder_name
             ),
@@ -297,6 +329,41 @@ async def _drain_album_queue(bot: Bot) -> None:
         )
         if not processed:
             return
+
+
+async def _run_queued_album_job(job: AlbumQueueJob):
+    request = DownloadRequest(
+        job.album_id,
+        output_format=job.output_format,
+        chapters=job.chapters,
+    )
+    album_dir = download_directory_for_request(DOWNLOAD_SETTINGS, request)
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            run_album_job_with_timeout,
+            request,
+            DOWNLOAD_SETTINGS,
+            CONFIG.output_root,
+            timeout_seconds=CONFIG.job_timeout_seconds,
+        )
+    )
+    while not task.done():
+        images = await asyncio.to_thread(collect_images, album_dir)
+        marker = album_dir / ".stage-building"
+        total_marker = album_dir / ".progress-total"
+        if marker.is_file():
+            total = len(images)
+            ALBUM_QUEUE.update_progress(job.id, stage="building", current=total, total=total)
+        elif CONFIG.progress_mode == "precise":
+            total = _read_positive_int(total_marker)
+            ALBUM_QUEUE.update_progress(
+                job.id,
+                stage="downloading",
+                current=len(images),
+                total=total,
+            )
+        await asyncio.sleep(0.5)
+    return await task
 
 
 async def _notify_job(bot: Bot, job: AlbumQueueJob, message: str) -> None:
@@ -314,6 +381,14 @@ async def _cleanup_job_files(album_dir, pdf_path) -> None:
 
 def _cleanup_album_download_dir(album_id: str) -> None:
     cleanup_album_files(CONFIG.download_root / album_id, CONFIG.output_root / f".missing-JM{album_id}.pdf")
+
+
+def _read_positive_int(path) -> int | None:
+    try:
+        value = int(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def main() -> None:

@@ -16,9 +16,9 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             pdf_path = Path(tmp) / "JM111111.pdf"
             pdf_path.write_bytes(b"pdf")
 
-            async def run_job(album_id):
-                calls.append(("run", album_id))
-                return AlbumJobResult(album_id=album_id, album_dir=Path(tmp) / album_id, pdf_path=pdf_path)
+            async def run_job(job):
+                calls.append(("run", job.album_id))
+                return AlbumJobResult(album_id=job.album_id, album_dir=Path(tmp) / job.album_id, pdf_path=pdf_path)
 
             async def upload_group(group_id, path):
                 calls.append(("upload_group", group_id, path))
@@ -61,10 +61,10 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             part1.write_bytes(b"pdf1")
             part2.write_bytes(b"pdf2")
 
-            async def run_job(album_id):
+            async def run_job(job):
                 return AlbumJobResult(
-                    album_id=album_id,
-                    album_dir=Path(tmp) / album_id,
+                    album_id=job.album_id,
+                    album_dir=Path(tmp) / job.album_id,
                     pdf_path=part1,
                     pdf_paths=(part1, part2),
                 )
@@ -109,8 +109,8 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             queued = queue.enqueue_private("222222", user_id=43)
             messages = []
 
-            async def run_job(album_id):
-                raise RuntimeError(f"download failed for {album_id}")
+            async def run_job(job):
+                raise RuntimeError(f"download failed for {job.album_id}")
 
             async def upload_group(group_id, path):
                 raise AssertionError("group upload should not run")
@@ -142,7 +142,7 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             queued = queue.enqueue_private("555555", user_id=45)
             messages = []
 
-            async def run_job(album_id):
+            async def run_job(job):
                 raise RuntimeError("secret upstream failure")
 
             async def upload_group(group_id, path):
@@ -177,8 +177,8 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             pdf_path = Path(tmp) / "JM333333.pdf"
             pdf_path.write_bytes(b"pdf")
 
-            async def run_job(album_id):
-                return AlbumJobResult(album_id=album_id, album_dir=Path(tmp) / album_id, pdf_path=pdf_path)
+            async def run_job(job):
+                return AlbumJobResult(album_id=job.album_id, album_dir=Path(tmp) / job.album_id, pdf_path=pdf_path)
 
             async def upload_group(group_id, path):
                 raise AssertionError("group upload should not run")
@@ -212,9 +212,9 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
             pdf_path.write_bytes(b"pdf")
             calls = []
 
-            async def run_job(album_id):
-                queue.admin_cancel_album(album_id, destination_type="private", user_id=44)
-                return AlbumJobResult(album_id=album_id, album_dir=Path(tmp) / album_id, pdf_path=pdf_path)
+            async def run_job(job):
+                queue.admin_cancel_album(job.album_id, destination_type="private", user_id=44)
+                return AlbumJobResult(album_id=job.album_id, album_dir=Path(tmp) / job.album_id, pdf_path=pdf_path)
 
             async def upload_group(group_id, path):
                 raise AssertionError("group upload should not run")
@@ -242,13 +242,105 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(("upload_private", 44, pdf_path), calls)
         self.assertTrue(any("已取消" in message for _, message in calls))
 
+    async def test_stops_remaining_parts_when_canceled_during_upload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("555555", user_id=44)
+            part1 = Path(tmp) / "JM555555.part1.pdf"
+            part2 = Path(tmp) / "JM555555.part2.pdf"
+            part1.write_bytes(b"pdf1")
+            part2.write_bytes(b"pdf2")
+            uploaded = []
+
+            async def run_job(job):
+                return AlbumJobResult(
+                    album_id=job.album_id,
+                    album_dir=Path(tmp) / job.album_id,
+                    pdf_path=part1,
+                    pdf_paths=(part1, part2),
+                )
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                uploaded.append(path)
+                queue.admin_cancel_album(
+                    queued.album_id,
+                    destination_type="private",
+                    user_id=queued.user_id,
+                )
+
+            async def notify(job, message):
+                return None
+
+            await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                is_canceled=queue.is_canceled,
+            )
+
+            row = queue.list_jobs()[0]
+
+        self.assertEqual(uploaded, [part1])
+        self.assertEqual(row.status, "canceled")
+
+    async def test_preserves_canceled_status_when_canceled_during_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            queued = queue.enqueue_private("666666", user_id=44)
+            pdf_path = Path(tmp) / "JM666666.pdf"
+            pdf_path.write_bytes(b"pdf")
+            notifications = []
+
+            async def run_job(job):
+                return AlbumJobResult(
+                    album_id=job.album_id,
+                    album_dir=Path(tmp) / job.album_id,
+                    pdf_path=pdf_path,
+                )
+
+            async def upload_group(group_id, path):
+                raise AssertionError("group upload should not run")
+
+            async def upload_private(user_id, path):
+                return None
+
+            async def cleanup(album_dir, path):
+                queue.admin_cancel_album(
+                    queued.album_id,
+                    destination_type="private",
+                    user_id=queued.user_id,
+                )
+
+            async def notify(job, message):
+                notifications.append(message)
+
+            await process_next_album_job(
+                queue,
+                run_job=run_job,
+                upload_group=upload_group,
+                upload_private=upload_private,
+                notify=notify,
+                cleanup=cleanup,
+                is_canceled=queue.is_canceled,
+            )
+
+            row = queue.list_jobs()[0]
+
+        self.assertEqual(row.status, "canceled")
+        self.assertEqual(len(notifications), 2)
+
     async def test_returns_false_when_queue_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
 
             processed = await process_next_album_job(
                 queue,
-                run_job=lambda album_id: None,
+                run_job=lambda job: None,
                 upload_group=lambda group_id, path: None,
                 upload_private=lambda user_id, path: None,
                 notify=lambda job, message: None,

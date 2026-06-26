@@ -36,6 +36,12 @@ class AlbumQueueJob:
     error: str | None
     created_at: str
     updated_at: str
+    output_format: str = "pdf"
+    chapters: tuple[int, ...] = ()
+    stage: str = "queued"
+    progress_current: int = 0
+    progress_total: int = 0
+    started_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -54,11 +60,40 @@ class PersistentAlbumQueue:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def enqueue_group(self, album_id: str, *, group_id: int, user_id: int) -> AlbumQueueJob:
-        return self._enqueue(album_id, destination_type="group", group_id=group_id, user_id=user_id)
+    def enqueue_group(
+        self,
+        album_id: str,
+        *,
+        group_id: int,
+        user_id: int,
+        output_format: str = "pdf",
+        chapters: tuple[int, ...] = (),
+    ) -> AlbumQueueJob:
+        return self._enqueue(
+            album_id,
+            destination_type="group",
+            group_id=group_id,
+            user_id=user_id,
+            output_format=output_format,
+            chapters=chapters,
+        )
 
-    def enqueue_private(self, album_id: str, *, user_id: int) -> AlbumQueueJob:
-        return self._enqueue(album_id, destination_type="private", group_id=None, user_id=user_id)
+    def enqueue_private(
+        self,
+        album_id: str,
+        *,
+        user_id: int,
+        output_format: str = "pdf",
+        chapters: tuple[int, ...] = (),
+    ) -> AlbumQueueJob:
+        return self._enqueue(
+            album_id,
+            destination_type="private",
+            group_id=None,
+            user_id=user_id,
+            output_format=output_format,
+            chapters=chapters,
+        )
 
     def claim_next(self) -> AlbumQueueJob | None:
         with self._connection() as connection:
@@ -81,6 +116,10 @@ class PersistentAlbumQueue:
                 SET status = 'processing',
                     attempts = attempts + 1,
                     error = NULL,
+                    stage = 'starting',
+                    progress_current = 0,
+                    progress_total = 0,
+                    started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE id = ?
                 """,
@@ -115,6 +154,27 @@ class PersistentAlbumQueue:
 
     def mark_failed(self, job_id: int, error: str) -> None:
         self._mark_finished(job_id, status="failed", error=error)
+
+    def update_progress(
+        self,
+        job_id: int,
+        *,
+        stage: str,
+        current: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE album_queue
+                SET stage = ?,
+                    progress_current = COALESCE(?, progress_current),
+                    progress_total = COALESCE(?, progress_total),
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?
+                """,
+                (stage, current, total, job_id),
+            )
 
     def count_ahead(self, job_id: int) -> int:
         with self._connection() as connection:
@@ -344,7 +404,19 @@ class PersistentAlbumQueue:
         user_id: int,
     ) -> AlbumQueueJob | None:
         with self._connection() as connection:
-            row = self._find_active_duplicate(connection, album_id, destination_type, group_id, user_id)
+            where, params = self._context_filter(destination_type, group_id, user_id)
+            row = connection.execute(
+                f"""
+                SELECT *
+                FROM album_queue
+                WHERE {where}
+                  AND album_id = ?
+                  AND status IN ('pending', 'processing')
+                ORDER BY priority DESC, id
+                LIMIT 1
+                """,
+                tuple([*params, album_id]),
+            ).fetchone()
         return None if row is None else _row_to_job(row)
 
     def move_to_front(self, job_id: int) -> AlbumQueueJob:
@@ -376,19 +448,32 @@ class PersistentAlbumQueue:
         destination_type: DestinationType,
         group_id: int | None,
         user_id: int,
+        output_format: str,
+        chapters: tuple[int, ...],
     ) -> AlbumQueueJob:
+        chapters_text = _chapters_to_text(chapters)
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            duplicate = self._find_active_duplicate(connection, album_id, destination_type, group_id, user_id)
+            duplicate = self._find_active_duplicate(
+                connection,
+                album_id,
+                destination_type,
+                group_id,
+                user_id,
+                output_format,
+                chapters_text,
+            )
             if duplicate is not None:
                 raise DuplicateAlbumJobError(_row_to_job(duplicate))
 
             cursor = connection.execute(
                 """
-                INSERT INTO album_queue (album_id, destination_type, group_id, user_id)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO album_queue (
+                    album_id, destination_type, group_id, user_id, output_format, chapters
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (album_id, destination_type, group_id, user_id),
+                (album_id, destination_type, group_id, user_id, output_format, chapters_text),
             )
             row = connection.execute("SELECT * FROM album_queue WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _row_to_job(row)
@@ -400,10 +485,11 @@ class PersistentAlbumQueue:
                 UPDATE album_queue
                 SET status = ?,
                     error = ?,
+                    stage = ?,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE id = ?
                 """,
-                (status, error, job_id),
+                (status, error, status, job_id),
             )
 
     def _find_active_duplicate(
@@ -413,6 +499,8 @@ class PersistentAlbumQueue:
         destination_type: DestinationType,
         group_id: int | None,
         user_id: int,
+        output_format: str = "pdf",
+        chapters_text: str = "",
     ) -> sqlite3.Row | None:
         if destination_type == "group":
             if group_id is None:
@@ -424,11 +512,13 @@ class PersistentAlbumQueue:
                 WHERE album_id = ?
                   AND destination_type = 'group'
                   AND group_id = ?
+                  AND output_format = ?
+                  AND chapters = ?
                   AND status IN ('pending', 'processing')
                 ORDER BY priority DESC, id
                 LIMIT 1
                 """,
-                (album_id, group_id),
+                (album_id, group_id, output_format, chapters_text),
             ).fetchone()
 
         return connection.execute(
@@ -438,11 +528,13 @@ class PersistentAlbumQueue:
             WHERE album_id = ?
               AND destination_type = 'private'
               AND user_id = ?
+              AND output_format = ?
+              AND chapters = ?
               AND status IN ('pending', 'processing')
             ORDER BY priority DESC, id
             LIMIT 1
             """,
-            (album_id, user_id),
+            (album_id, user_id, output_format, chapters_text),
         ).fetchone()
 
     def _find_user_job(
@@ -533,6 +625,12 @@ class PersistentAlbumQueue:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     priority INTEGER NOT NULL DEFAULT 0,
                     error TEXT,
+                    output_format TEXT NOT NULL DEFAULT 'pdf',
+                    chapters TEXT NOT NULL DEFAULT '',
+                    stage TEXT NOT NULL DEFAULT 'queued',
+                    progress_current INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    started_at TEXT,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                     CHECK (
@@ -559,14 +657,9 @@ class PersistentAlbumQueue:
         columns = [row["name"] for row in connection.execute("PRAGMA table_info(album_queue)").fetchall()]
         status_sql = str(table["sql"])
         needs_rebuild = "canceled" not in status_sql
-        if not needs_rebuild and "priority" not in columns:
-            connection.execute("ALTER TABLE album_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
-            return
-        if not needs_rebuild:
-            return
-
-        connection.execute("ALTER TABLE album_queue RENAME TO album_queue_old")
-        connection.execute(
+        if needs_rebuild:
+            connection.execute("ALTER TABLE album_queue RENAME TO album_queue_old")
+            connection.execute(
             """
             CREATE TABLE album_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -578,6 +671,12 @@ class PersistentAlbumQueue:
                 attempts INTEGER NOT NULL DEFAULT 0,
                 priority INTEGER NOT NULL DEFAULT 0,
                 error TEXT,
+                output_format TEXT NOT NULL DEFAULT 'pdf',
+                chapters TEXT NOT NULL DEFAULT '',
+                stage TEXT NOT NULL DEFAULT 'queued',
+                progress_current INTEGER NOT NULL DEFAULT 0,
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 CHECK (
@@ -586,9 +685,9 @@ class PersistentAlbumQueue:
                 )
             )
             """
-        )
-        priority_expr = "priority" if "priority" in columns else "0"
-        connection.execute(
+            )
+            priority_expr = "priority" if "priority" in columns else "0"
+            connection.execute(
             f"""
             INSERT INTO album_queue (
                 id, album_id, destination_type, group_id, user_id, status, attempts,
@@ -599,8 +698,22 @@ class PersistentAlbumQueue:
                 {priority_expr}, error, created_at, updated_at
             FROM album_queue_old
             """
-        )
-        connection.execute("DROP TABLE album_queue_old")
+            )
+            connection.execute("DROP TABLE album_queue_old")
+
+        columns = [row["name"] for row in connection.execute("PRAGMA table_info(album_queue)").fetchall()]
+        additions = {
+            "priority": "INTEGER NOT NULL DEFAULT 0",
+            "output_format": "TEXT NOT NULL DEFAULT 'pdf'",
+            "chapters": "TEXT NOT NULL DEFAULT ''",
+            "stage": "TEXT NOT NULL DEFAULT 'queued'",
+            "progress_current": "INTEGER NOT NULL DEFAULT 0",
+            "progress_total": "INTEGER NOT NULL DEFAULT 0",
+            "started_at": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE album_queue ADD COLUMN {name} {definition}")
 
 
 def _row_to_job(row: sqlite3.Row) -> AlbumQueueJob:
@@ -616,4 +729,18 @@ def _row_to_job(row: sqlite3.Row) -> AlbumQueueJob:
         error=row["error"],
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        output_format=str(row["output_format"]),
+        chapters=_text_to_chapters(str(row["chapters"])),
+        stage=str(row["stage"]),
+        progress_current=int(row["progress_current"]),
+        progress_total=int(row["progress_total"]),
+        started_at=None if row["started_at"] is None else str(row["started_at"]),
     )
+
+
+def _chapters_to_text(chapters: tuple[int, ...]) -> str:
+    return ",".join(str(chapter) for chapter in chapters)
+
+
+def _text_to_chapters(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split(",") if part)
