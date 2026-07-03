@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jmbot.core.catalog_service import AlbumDetail, SearchKind, SearchResult
+from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchKind, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_album_detail,
@@ -49,6 +49,8 @@ class SearchReply:
 
     message: str
     cover_album_ids: tuple[str, ...] = ()
+    card_items: tuple[SearchItem, ...] = ()
+    card_result: SearchResult | None = None
 
 
 def enqueue_album_request(
@@ -177,8 +179,26 @@ async def query_album_search_reply(
         return SearchReply(format_query_failed("搜索"))
 
     effective_limit = limit if limit is not None else (cover_limit or None)
-    cover_album_ids = tuple(item.album_id for item in result.items[:cover_limit])
-    return SearchReply(format_search_result(result, command_prefix, limit=effective_limit), cover_album_ids)
+    card_items = result.items[:cover_limit] if cover_limit else ()
+    cover_album_ids = tuple(item.album_id for item in card_items)
+    card_result = (
+        SearchResult(
+            keyword=result.keyword,
+            kind=result.kind,
+            page=result.page,
+            page_count=result.page_count,
+            total=result.total,
+            items=card_items,
+        )
+        if card_items
+        else None
+    )
+    return SearchReply(
+        format_search_result(result, command_prefix, limit=effective_limit),
+        cover_album_ids,
+        card_items,
+        card_result,
+    )
 
 
 async def deliver_cover(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import nonebot
 from nonebot import get_driver, on_message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
@@ -40,6 +41,7 @@ from jmbot.core.job_executor import run_album_job_with_timeout
 from jmbot.core.message_scope import is_friend_private_message
 from jmbot.core.parser import JmMessage, parse_jm_admin_message, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
+from jmbot.core.query_executor import query_cover
 from jmbot.core.queue_processor import process_next_album_job
 from jmbot.core.recovery import recover_interrupted_jobs
 from jmbot.core.sender import (
@@ -48,6 +50,7 @@ from jmbot.core.sender import (
     upload_group_pdf,
     upload_private_pdf,
 )
+from jmbot.core.search_card import build_search_result_card
 from jmbot.core.user_store import UserDataStore
 
 
@@ -257,17 +260,27 @@ async def _handle_parsed_command(
             limit=5 if is_author_search else None,
             cover_limit=5 if is_author_search else 0,
         )
-        await jm_matcher.send(reply.message)
-        for album_id in reply.cover_album_ids:
-            cover_error = await deliver_cover(
-                album_id,
-                CONFIG.preview_root,
-                QUERY_SEMAPHORE,
-                deliver=lambda path: _send_cover(bot, target, path),
-                timeout_seconds=CONFIG.query_timeout_seconds,
-            )
+        if is_author_search and reply.card_items:
+            card_error = await _send_author_search_card(bot, target, command.keyword, command.page, reply)
+            if card_error is not None:
+                await jm_matcher.send(card_error)
+                await jm_matcher.send(reply.message)
+            else:
+                await jm_matcher.send(_author_search_command_text(reply))
+        elif reply.cover_album_ids:
+            await jm_matcher.send(reply.message)
+            for album_id in reply.cover_album_ids:
+                cover_error = await deliver_cover(
+                    album_id,
+                    CONFIG.preview_root,
+                    QUERY_SEMAPHORE,
+                    deliver=lambda path: _send_cover(bot, target, path),
+                    timeout_seconds=CONFIG.query_timeout_seconds,
+                )
             if cover_error is not None:
                 await jm_matcher.send(cover_error)
+        else:
+            await jm_matcher.send(reply.message)
         return False
 
     if command.action == "favorite_add":
@@ -366,6 +379,48 @@ async def _send_cover(bot: Bot, target: QueueTarget, path) -> None:
         await send_group_image(bot, target.group_id, path)
     else:
         await send_private_image(bot, target.user_id, path)
+
+
+async def _send_author_search_card(bot: Bot, target: QueueTarget, keyword: str, page: int, reply) -> str | None:
+    media_dir = CONFIG.preview_root / "author-search" / f"{target.user_id}-{page}"
+    try:
+        await asyncio.to_thread(shutil.rmtree, media_dir, True)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        cover_paths = []
+        for album_id in reply.cover_album_ids:
+            result = await asyncio.to_thread(
+                query_cover,
+                album_id,
+                CONFIG.preview_root,
+                timeout_seconds=CONFIG.query_timeout_seconds,
+            )
+            target_cover = media_dir / result.cover_path.name
+            await asyncio.to_thread(shutil.copyfile, result.cover_path, target_cover)
+            cover_paths.append(target_cover)
+            await asyncio.to_thread(shutil.rmtree, result.media_dir, True)
+
+        card_path = await asyncio.to_thread(
+            build_search_result_card,
+            reply.card_result,
+            cover_paths,
+            media_dir / "author-search.png",
+            command_prefix=CONFIG.command_prefix,
+        )
+        await _send_cover(bot, target, card_path)
+    except Exception:
+        return "作者作品卡片生成失败，请稍后重试。"
+    finally:
+        await asyncio.to_thread(shutil.rmtree, media_dir, True)
+    return None
+
+
+def _author_search_command_text(reply) -> str:
+    lines = ["可复制命令："]
+    for item in reply.card_items:
+        lines.append(f"JM{item.album_id} 下载：{CONFIG.command_prefix} {item.album_id}")
+    if reply.card_result is not None and reply.card_result.page < reply.card_result.page_count:
+        lines.append(f"下一页：{CONFIG.command_prefix} 作者 {reply.card_result.keyword} {reply.card_result.page + 1}")
+    return "\n".join(lines)
 
 
 async def _upload_preview(bot: Bot, target: QueueTarget, path) -> None:
