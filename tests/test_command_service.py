@@ -349,6 +349,40 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("JM111115", reply.message)
         self.assertNotIn("JM111116", reply.message)
 
+    async def test_author_search_reply_paginates_five_items_across_source_pages(self):
+        semaphore = asyncio.Semaphore(1)
+        calls = []
+
+        def query(keyword, *, kind, page, timeout_seconds):
+            calls.append(page)
+            start = (page - 1) * 10 + 1
+            return SearchResult(
+                keyword,
+                kind,
+                page,
+                3,
+                24,
+                tuple(SearchItem(f"{index:06d}", f"Title {index}", ()) for index in range(start, start + 10)),
+            )
+
+        reply = await query_album_search_reply(
+            "author-name",
+            kind="author",
+            page=3,
+            semaphore=semaphore,
+            timeout_seconds=20,
+            command_prefix="/jm",
+            query_func=query,
+            cover_limit=5,
+        )
+
+        self.assertEqual(calls, [1, 2])
+        self.assertEqual(reply.cover_album_ids, ("000011", "000012", "000013", "000014", "000015"))
+        self.assertIsNotNone(reply.card_result)
+        self.assertEqual(reply.card_result.page, 3)
+        self.assertEqual(reply.card_result.page_count, 5)
+        self.assertEqual(reply.card_result.total, 24)
+
     async def test_search_failure_returns_safe_message(self):
         def query(keyword, *, kind, page, timeout_seconds):
             raise RuntimeError("secret upstream failure")
