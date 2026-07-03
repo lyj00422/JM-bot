@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -167,13 +168,24 @@ async def query_album_search_reply(
 
     try:
         async with semaphore:
-            result = await asyncio.to_thread(
-                query_func,
-                keyword,
-                kind=kind,
-                page=page,
-                timeout_seconds=timeout_seconds,
-            )
+            if kind == "author" and cover_limit > 0:
+                result = await asyncio.to_thread(
+                    _query_author_search_card_page,
+                    query_func,
+                    keyword,
+                    kind,
+                    page,
+                    cover_limit,
+                    timeout_seconds,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    query_func,
+                    keyword,
+                    kind=kind,
+                    page=page,
+                    timeout_seconds=timeout_seconds,
+                )
     except Exception:
         LOGGER.exception("Album search query failed for %s page %s kind %s", keyword, page, kind)
         return SearchReply(format_query_failed("搜索"))
@@ -198,6 +210,45 @@ async def query_album_search_reply(
         cover_album_ids,
         card_items,
         card_result,
+    )
+
+
+def _query_author_search_card_page(
+    query_func: SearchQuery,
+    keyword: str,
+    kind: SearchKind,
+    page: int,
+    page_size: int,
+    timeout_seconds: int,
+) -> SearchResult:
+    start_index = max(page - 1, 0) * page_size
+    end_index = start_index + page_size
+    source_page = 1
+    collected: list[SearchItem] = []
+    first_result: SearchResult | None = None
+
+    while True:
+        result = query_func(keyword, kind=kind, page=source_page, timeout_seconds=timeout_seconds)
+        if first_result is None:
+            first_result = result
+        collected.extend(result.items)
+
+        if len(collected) >= end_index or source_page >= max(result.page_count, source_page):
+            break
+        source_page += 1
+
+    if first_result is None:
+        return SearchResult(keyword, kind, page, page, 0, ())
+
+    total = first_result.total
+    page_count = max(1, math.ceil(total / page_size)) if total > 0 else max(page, math.ceil(len(collected) / page_size))
+    return SearchResult(
+        keyword=first_result.keyword,
+        kind=first_result.kind,
+        page=page,
+        page_count=page_count,
+        total=total,
+        items=tuple(collected[start_index:end_index]),
     )
 
 
