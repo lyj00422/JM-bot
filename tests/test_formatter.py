@@ -136,6 +136,21 @@ class FormatterTest(unittest.TestCase):
         self.assertNotIn("更新时间：", message)
         self.assertNotIn("未知", message)
 
+    def test_format_author_search_result_limits_items_to_five(self):
+        result = SearchResult(
+            keyword="author-name",
+            kind="author",
+            page=1,
+            page_count=2,
+            total=6,
+            items=tuple(SearchItem(str(111110 + index), f"Title {index}", ()) for index in range(1, 7)),
+        )
+
+        message = format_search_result(result, "/jm", limit=5)
+
+        self.assertIn("JM111115", message)
+        self.assertNotIn("JM111116", message)
+
     def test_format_empty_search_result_is_short_and_actionable(self):
         result = SearchResult(
             keyword="不存在",

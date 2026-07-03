@@ -78,7 +78,7 @@ def format_query_failed(query_name: str) -> str:
     return f"{query_name}查询暂时不可用，请稍后重试。"
 
 
-def format_search_result(result: SearchResult, command_prefix: str = "/jm") -> str:
+def format_search_result(result: SearchResult, command_prefix: str = "/jm", *, limit: int | None = None) -> str:
     """Return compact search results without unreliable optional metadata."""
 
     prefix = command_prefix
@@ -94,7 +94,8 @@ def format_search_result(result: SearchResult, command_prefix: str = "/jm") -> s
     page_count = max(result.page_count, result.page)
     total = max(result.total, len(result.items))
     lines = [f"{title}：第 {result.page} / {page_count} 页，共 {total} 条"]
-    for index, item in enumerate(result.items, start=1):
+    visible_items = result.items if limit is None else result.items[:limit]
+    for index, item in enumerate(visible_items, start=1):
         title_suffix = f" {item.title}" if item.title and item.title != item.album_id else ""
         lines.append(f"{index}. JM{item.album_id}{title_suffix}")
         if item.tags:

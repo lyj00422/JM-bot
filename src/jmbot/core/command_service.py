@@ -43,6 +43,14 @@ class QueueTarget:
     user_id: int
 
 
+@dataclass(frozen=True)
+class SearchReply:
+    """Formatted search reply plus cover IDs that should be sent with it."""
+
+    message: str
+    cover_album_ids: tuple[str, ...] = ()
+
+
 def enqueue_album_request(
     queue: PersistentAlbumQueue,
     album_id: str,
@@ -139,6 +147,38 @@ async def query_album_search_message(
         return format_query_failed("搜索")
 
     return format_search_result(result, command_prefix)
+
+
+async def query_album_search_reply(
+    keyword: str,
+    *,
+    kind: SearchKind,
+    page: int,
+    semaphore: asyncio.Semaphore,
+    timeout_seconds: int,
+    command_prefix: str = "/jm",
+    query_func: SearchQuery = query_album_search,
+    limit: int | None = None,
+    cover_limit: int = 0,
+) -> SearchReply:
+    """Fetch and format album search results, optionally returning cover IDs."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                keyword,
+                kind=kind,
+                page=page,
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        LOGGER.exception("Album search query failed for %s page %s kind %s", keyword, page, kind)
+        return SearchReply(format_query_failed("搜索"))
+
+    effective_limit = limit if limit is not None else (cover_limit or None)
+    cover_album_ids = tuple(item.album_id for item in result.items[:cover_limit])
+    return SearchReply(format_search_result(result, command_prefix, limit=effective_limit), cover_album_ids)
 
 
 async def deliver_cover(
@@ -324,6 +364,9 @@ def progress_summary(
     mode: str,
 ) -> str:
     if album_id is None:
+        all_active_message = _progress_summary_for_all_active(queue, target, mode=mode)
+        if all_active_message is not None:
+            return all_active_message
         latest = queue.find_latest_active_for_user(
             destination_type=target.destination_type,
             group_id=target.group_id,
@@ -358,6 +401,41 @@ def progress_summary(
         }
         chapter_label = f" 章节{','.join(map(str, job.chapters))}" if job.chapters else " 全部章节"
         lines.append(f"{index}. {job.output_format.upper()}{chapter_label}")
+        lines.append(f"   阶段：{stage_labels.get(job.stage, job.stage)}")
+        if mode == "precise" and job.progress_total > 0:
+            lines.append(f"   已完成：{job.progress_current} / {job.progress_total} 页")
+        elif mode == "precise" and job.progress_current > 0:
+            lines.append(f"   已下载：{job.progress_current} 页")
+        if job.started_at:
+            started = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
+            seconds = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+            minutes, seconds = divmod(seconds, 60)
+            lines.append(f"   已运行：{minutes} 分 {seconds} 秒")
+    return "\n".join(lines)
+
+
+def _progress_summary_for_all_active(queue: PersistentAlbumQueue, target: QueueTarget, *, mode: str) -> str | None:
+    jobs = queue.list_active_for_user(
+        destination_type=target.destination_type,
+        group_id=target.group_id,
+        user_id=target.user_id,
+    )
+    if not jobs:
+        return None
+    latest = max(jobs, key=lambda job: job.id)
+    ordered_jobs = [latest, *(job for job in jobs if job.id != latest.id)]
+
+    lines = [f"JM{latest.album_id} 当前进度："]
+    for index, job in enumerate(ordered_jobs, start=1):
+        stage_labels = {
+            "queued": "排队中",
+            "starting": "准备中",
+            "downloading": "下载图片",
+            "building": f"生成 {job.output_format.upper()}",
+            "uploading": "上传中",
+        }
+        chapter_label = f" 章节{','.join(map(str, job.chapters))}" if job.chapters else " 全部章节"
+        lines.append(f"{index}. JM{job.album_id} {job.output_format.upper()}{chapter_label}")
         lines.append(f"   阶段：{stage_labels.get(job.stage, job.stage)}")
         if mode == "precise" and job.progress_total > 0:
             lines.append(f"   已完成：{job.progress_current} / {job.progress_total} 页")
