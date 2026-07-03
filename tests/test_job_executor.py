@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from jmbot.core.jm_service import AlbumJobResult
-from jmbot.core.job_executor import JobTimeoutError, run_with_timeout
+from jmbot.core.job_executor import JobCanceledError, JobTimeoutError, run_with_timeout
 
 
 def _return_album_result(album_id: str, root: str) -> AlbumJobResult:
@@ -38,6 +38,19 @@ class JobExecutorTest(unittest.TestCase):
 
         self.assertLess(time.monotonic() - started, 3)
 
+    def test_terminates_child_when_cancel_checker_trips(self):
+        started = time.monotonic()
+
+        with self.assertRaises(JobCanceledError):
+            run_with_timeout(
+                _sleep_for,
+                10,
+                timeout_seconds=5,
+                cancel_checker=lambda: True,
+                poll_interval=0.05,
+            )
+
+        self.assertLess(time.monotonic() - started, 3)
 
 if __name__ == "__main__":
     unittest.main()

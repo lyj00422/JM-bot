@@ -26,7 +26,7 @@ from jmbot.core.command_service import (
     prune_history,
     progress_summary,
     query_album_detail_message,
-    query_album_search_message,
+    query_album_search_reply,
     remove_favorite_album,
     queue_summary,
     task_history,
@@ -246,15 +246,28 @@ async def _handle_parsed_command(
     if command.action == "search":
         if command.keyword is None:
             return False
-        message = await query_album_search_message(
+        is_author_search = command.search_kind == "author"
+        reply = await query_album_search_reply(
             command.keyword,
             kind=command.search_kind,
             page=command.page,
             semaphore=QUERY_SEMAPHORE,
             timeout_seconds=CONFIG.query_timeout_seconds,
             command_prefix=CONFIG.command_prefix,
+            limit=5 if is_author_search else None,
+            cover_limit=5 if is_author_search else 0,
         )
-        await jm_matcher.send(message)
+        await jm_matcher.send(reply.message)
+        for album_id in reply.cover_album_ids:
+            cover_error = await deliver_cover(
+                album_id,
+                CONFIG.preview_root,
+                QUERY_SEMAPHORE,
+                deliver=lambda path: _send_cover(bot, target, path),
+                timeout_seconds=CONFIG.query_timeout_seconds,
+            )
+            if cover_error is not None:
+                await jm_matcher.send(cover_error)
         return False
 
     if command.action == "favorite_add":
@@ -309,7 +322,7 @@ async def _handle_parsed_command(
         reply = admin_kill_album(ALBUM_QUEUE, command.album_id, target, all_targets=command.all_targets)
         await asyncio.to_thread(_cleanup_album_download_dir, command.album_id)
         await jm_matcher.send(reply)
-        return False
+        return True
 
     if command.action == "admin_jump":
         if command.album_id is None:
@@ -407,6 +420,7 @@ async def _run_queued_album_job(job: AlbumQueueJob):
             DOWNLOAD_SETTINGS,
             CONFIG.output_root,
             timeout_seconds=CONFIG.job_timeout_seconds,
+            cancel_checker=lambda: ALBUM_QUEUE.is_canceled(job.id),
         )
     )
     while not task.done():

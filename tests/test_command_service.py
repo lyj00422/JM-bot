@@ -18,6 +18,7 @@ from jmbot.core.command_service import (
     deliver_cover,
     deliver_preview,
     query_album_detail_message,
+    query_album_search_reply,
     query_album_search_message,
     my_tasks_summary,
     remove_favorite_album,
@@ -97,6 +98,20 @@ class CommandServiceTest(unittest.TestCase):
 
         self.assertIn("JM222222 当前进度", message)
         self.assertNotIn("JM111111 当前进度", message)
+
+    def test_progress_summary_without_id_includes_every_active_job_for_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            target = QueueTarget(destination_type="private", group_id=None, user_id=42)
+            queue.enqueue_private("111111", user_id=42)
+            queue.enqueue_private("222222", user_id=42)
+            queue.enqueue_private("333333", user_id=99)
+
+            message = progress_summary(queue, None, target, mode="stage")
+
+        self.assertIn("JM111111", message)
+        self.assertIn("JM222222", message)
+        self.assertNotIn("JM333333", message)
 
     def test_enqueue_duplicate_reports_existing_job(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -304,6 +319,34 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [("测试", "site", 2, 20)])
         self.assertIn("搜索「测试」", message)
         self.assertIn("JM111111 搜索结果", message)
+
+    async def test_author_search_reply_limits_to_five_and_includes_cover_ids(self):
+        semaphore = asyncio.Semaphore(1)
+
+        def query(keyword, *, kind, page, timeout_seconds):
+            return SearchResult(
+                keyword,
+                kind,
+                page,
+                2,
+                6,
+                tuple(SearchItem(str(111110 + index), f"Title {index}", ()) for index in range(1, 7)),
+            )
+
+        reply = await query_album_search_reply(
+            "author-name",
+            kind="author",
+            page=1,
+            semaphore=semaphore,
+            timeout_seconds=20,
+            command_prefix="/jm",
+            query_func=query,
+            cover_limit=5,
+        )
+
+        self.assertEqual(reply.cover_album_ids, ("111111", "111112", "111113", "111114", "111115"))
+        self.assertIn("JM111115", reply.message)
+        self.assertNotIn("JM111116", reply.message)
 
     async def test_search_failure_returns_safe_message(self):
         def query(keyword, *, kind, page, timeout_seconds):
