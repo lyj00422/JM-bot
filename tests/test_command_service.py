@@ -345,6 +345,7 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(reply.cover_album_ids, ("111111", "111112", "111113", "111114", "111115"))
+        self.assertEqual([item.album_id for item in reply.card_items], ["111111", "111112", "111113", "111114", "111115"])
         self.assertIn("JM111115", reply.message)
         self.assertNotIn("JM111116", reply.message)
 

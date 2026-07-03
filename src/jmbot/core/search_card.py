@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+from textwrap import wrap
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+from jmbot.core.catalog_service import SearchResult
+
+
+def build_search_result_card(
+    result: SearchResult,
+    cover_paths: Sequence[str | Path],
+    output_path: str | Path,
+    *,
+    command_prefix: str = "/jm",
+) -> Path:
+    """Render search result items and their covers into one PNG card."""
+
+    items = result.items[: len(cover_paths)]
+    if not items:
+        raise ValueError("at least one search item is required")
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    row_height = 210
+    width = 960
+    padding = 28
+    header_height = 72
+    height = header_height + row_height * len(items) + padding
+    image = Image.new("RGB", (width, height), (248, 248, 246))
+    draw = ImageDraw.Draw(image)
+    title_font = _font(30)
+    body_font = _font(23)
+    small_font = _font(19)
+
+    title = f"作者「{result.keyword}」作品" if result.kind == "author" else f"搜索「{result.keyword}」"
+    draw.text((padding, 22), f"{title}  第 {result.page} / {max(result.page_count, result.page)} 页", fill=(28, 31, 35), font=title_font)
+
+    for index, (item, cover_path) in enumerate(zip(items, cover_paths), start=1):
+        top = header_height + (index - 1) * row_height
+        draw.rounded_rectangle((padding, top + 10, width - padding, top + row_height - 10), radius=12, fill=(255, 255, 255), outline=(222, 224, 226))
+
+        cover = _fit_cover(cover_path, (124, 176))
+        image.paste(cover, (padding + 18, top + 27))
+
+        text_x = padding + 166
+        draw.text((text_x, top + 28), f"{index}. JM{item.album_id}", fill=(42, 84, 130), font=body_font)
+        title_lines = wrap(item.title or item.album_id, width=28)[:2]
+        for line_index, line in enumerate(title_lines):
+            draw.text((text_x, top + 66 + line_index * 30), line, fill=(25, 28, 32), font=body_font)
+        if item.tags:
+            draw.text((text_x, top + 130), " / ".join(item.tags[:6]), fill=(91, 96, 102), font=small_font)
+        draw.text((text_x, top + 162), f"下载：{command_prefix} {item.album_id}    详情：{command_prefix} 详情 {item.album_id}", fill=(64, 66, 70), font=small_font)
+
+    image.save(output, format="PNG")
+    return output
+
+
+def _fit_cover(path: str | Path, size: tuple[int, int]) -> Image.Image:
+    with Image.open(path) as image:
+        return ImageOps.fit(image.convert("RGB"), size, method=Image.Resampling.LANCZOS)
+
+
+def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = [
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return ImageFont.truetype(candidate, size=size)
+    return ImageFont.load_default()
