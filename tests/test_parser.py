@@ -188,6 +188,24 @@ class ParseJmCommandTest(unittest.TestCase):
                 self.assertEqual(result.search_kind, search_kind)
                 self.assertEqual(result.keyword, keyword)
                 self.assertEqual(result.page, page)
+                self.assertEqual(result.search_view, "default")
+
+    def test_parse_author_text_search_commands(self):
+        cases = [
+            ("/jm 作者 文本 柊ぽぷら", "柊ぽぷら", 1),
+            ("/jm 作者 文本 柊ぽぷら 2", "柊ぽぷら", 2),
+        ]
+
+        for message, keyword, page in cases:
+            with self.subTest(message=message):
+                result = parse_jm_message(message)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, "search")
+                self.assertEqual(result.search_kind, "author")
+                self.assertEqual(result.search_view, "text")
+                self.assertEqual(result.keyword, keyword)
+                self.assertEqual(result.page, page)
 
     def test_parse_search_numeric_keyword_is_not_treated_as_page(self):
         result = parse_jm_message("/jm 搜索 271673")

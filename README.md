@@ -50,6 +50,8 @@ git pull origin release/aliyun-2c2g
 /jm 搜索 关键词 2
 /jm 作者 作者名
 /jm 作者 作者名 2
+/jm 作者 文本 作者名
+/jm 作者 文本 作者名 2
 /jm 收藏 123456
 /jm 取消收藏 123456
 /jm 我的收藏
@@ -93,7 +95,8 @@ git pull origin release/aliyun-2c2g
 
 - `/jm 撤回 <id>` 只能撤回自己在当前群或当前私聊里提交、且仍处于排队中的任务；已经开始处理的任务需要管理员 `kill`。
 - 详情查询在独立子进程中执行，查询超时会被强制终止，不会长期占住 Bot 事件循环。
-- `/jm 搜索 <关键词> [页码]` 使用站内搜索，返回可下载的 JM ID 列表；`/jm 作者 <作者名> [页码]` 搜索作者作品。
+- `/jm 搜索 <关键词> [页码]` 使用站内搜索，返回可下载的 JM ID 列表；`/jm 作者 <作者名> [页码]` 默认发送作者作品图片卡片。
+- `/jm 作者 文本 <作者名> [页码]` 使用快速文本列表，不下载封面、不生成图片卡片。
 - 搜索结果只展示 ID、标题和有效标签，不展示容易缺失的页数和更新时间；结果底部会提示下一页命令。
 - `/jm 收藏 <id>`、`/jm 取消收藏 <id>`、`/jm 我的收藏` 管理自己的收藏；收藏按 QQ 用户全局保存，不分群。
 - `/jm 封面 <id>` 直接在当前群或私聊发送封面图片，不上传到群文件。
@@ -113,6 +116,8 @@ git pull origin release/aliyun-2c2g
 - `/jmg 插队 <id>` 会把当前群或当前私聊里的任务放到队首；如果还没有这个任务，会先创建再插队。
 - `/jmg 失败` 会查看已保留的全局失败任务；`/jmg 失败 最近 5` 只看最近 5 条；`/jmg 失败 <任务ID>` 查看详细失败原因；`/jmg 失败 删除 <任务ID>` 手动删除一条失败记录。
 - 下载失败时，ID 不存在或仅登录可见等用户可处理原因会直接显示给用户且不保留失败记录；其他技术原因只返回任务 ID，详细失败原因保留给管理员后续排查。
+- 详情、封面、预览和搜索等需要等待的命令会先回复“收到，正在处理…”。下载或预览成功后不再额外发送完成文字，文件消息本身就是结果；失败和取消仍会通知。
+- 为兼容 `jmcomic` 新版本的部分下载失败标记，Bot 会在下载结束后自行校验最终图片数量：图片完整则继续生成文件，图片缺失才判定失败。
 
 ## 本地安装
 
@@ -327,17 +332,17 @@ sudo systemctl restart jmbot
 
 ```bash
 # 本地机器
-PACKAGE=JMbot-v0.3.5.tar.gz
+PACKAGE=JMbot-v0.3.6.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.3.5.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.3.6.tar.gz
 scp "$PACKAGE" root@你的服务器IP:/tmp/
 
 # 服务器
 sudo systemctl stop jmbot
 sudo mkdir -p /opt/jmbot
-PACKAGE=JMbot-v0.3.5.tar.gz
+PACKAGE=JMbot-v0.3.6.tar.gz
 # 阿里云 2C2G 优化版使用：
-# PACKAGE=JMbot-aliyun2c2g-v0.3.5.tar.gz
+# PACKAGE=JMbot-aliyun2c2g-v0.3.6.tar.gz
 sudo tar -xzf "/tmp/$PACKAGE" -C /opt/jmbot --strip-components=1
 cd /opt/jmbot
 python3 -m venv .venv

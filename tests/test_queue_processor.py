@@ -101,7 +101,7 @@ class QueueProcessorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("cleanup", Path(tmp) / "111111", part1), calls)
         self.assertIn(("cleanup", Path(tmp) / "111111", part2), calls)
         notify_messages = [call[1] for call in calls if call[0] == "notify"]
-        self.assertTrue(any("JM111111.part1.pdf" in message and "JM111111.part2.pdf" in message for message in notify_messages))
+        self.assertFalse(any("已上传" in message for message in notify_messages))
 
     async def test_processes_private_job_and_marks_failed_on_error(self):
         with tempfile.TemporaryDirectory() as tmp:

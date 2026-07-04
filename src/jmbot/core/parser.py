@@ -46,6 +46,7 @@ class JmMessage:
     output_format: str = "pdf"
     chapters: tuple[int, ...] = ()
     search_kind: str = "site"
+    search_view: str = "default"
     keyword: str | None = None
     page: int = 1
     request_id: int | None = None
@@ -134,10 +135,17 @@ def parse_jm_message(
     search_match = re.match(rf"^\s*{prefix}\s+(搜索|search|作者)\s+(.+?)\s*$", message, re.IGNORECASE)
     if search_match is not None:
         search_kind = "author" if search_match.group(1).lower() == "作者" else "site"
-        keyword, page = _parse_search_keyword_and_page(search_match.group(2))
+        search_view = "default"
+        search_text = search_match.group(2)
+        if search_kind == "author":
+            author_text_match = re.match(r"^\s*文本\s+(.+?)\s*$", search_text, re.IGNORECASE)
+            if author_text_match is not None:
+                search_view = "text"
+                search_text = author_text_match.group(1)
+        keyword, page = _parse_search_keyword_and_page(search_text)
         if keyword is None:
             return None
-        return JmMessage(action="search", search_kind=search_kind, keyword=keyword, page=page)
+        return JmMessage(action="search", search_kind=search_kind, search_view=search_view, keyword=keyword, page=page)
 
     favorite_add_match = re.match(rf"^\s*{prefix}\s+收藏\s+([0-9]+)\s*$", message, re.IGNORECASE)
     if favorite_add_match is not None:

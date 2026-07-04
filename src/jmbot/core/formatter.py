@@ -19,6 +19,7 @@ def format_help(command_prefix: str = "/jm", admin_command_prefix: str = "/jmg")
             f"{prefix} 详情 123456 - 查看漫画详情",
             f"{prefix} 搜索 关键词 - 搜索漫画",
             f"{prefix} 作者 作者名 - 搜索作者作品",
+            f"{prefix} 作者 文本 作者名 - 文本搜索作者作品",
             f"{prefix} 收藏 123456 - 收藏漫画",
             f"{prefix} 我的收藏 - 查看收藏",
             f"{prefix} 封面 123456 - 发送封面图片",

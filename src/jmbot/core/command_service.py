@@ -26,6 +26,7 @@ from jmbot.core.formatter import (
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.query_executor import query_album_detail, query_album_search, query_cover, query_preview
+from jmbot.core.parser import JmMessage
 from jmbot.core.user_store import UserDataStore
 
 
@@ -52,6 +53,14 @@ class SearchReply:
     cover_album_ids: tuple[str, ...] = ()
     card_items: tuple[SearchItem, ...] = ()
     card_result: SearchResult | None = None
+
+
+def search_reply_options(command: JmMessage) -> tuple[int | None, int]:
+    """Return text limit and cover count for the requested search display."""
+
+    if command.action == "search" and command.search_kind == "author" and command.search_view != "text":
+        return 5, 5
+    return None, 0
 
 
 def enqueue_album_request(
@@ -288,7 +297,7 @@ async def deliver_preview(
     page_count: int,
     timeout_seconds: int,
     query_func: PreviewQuery = query_preview,
-) -> str:
+) -> str | None:
     """Build, upload, and clean one preview PDF."""
 
     try:
@@ -302,7 +311,7 @@ async def deliver_preview(
             )
             await deliver(result.pdf_path)
             await asyncio.to_thread(shutil.rmtree, result.media_dir, True)
-        return f"JM{album_id} 预览已上传。"
+        return None
     except Exception:
         LOGGER.exception("Preview delivery failed for JM%s", album_id)
         return f"JM{album_id} 预览生成失败，请稍后重试。"
