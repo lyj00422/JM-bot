@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from inspect import Parameter, signature
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 import jmcomic
 
@@ -24,7 +25,7 @@ class CreateOption(Protocol):
 class DownloadAlbum(Protocol):
     """Protocol for injecting jmcomic.download_album in tests."""
 
-    def __call__(self, album_id: str, option): ...
+    def __call__(self, album_id: str, option, **kwargs: Any): ...
 
 
 class PageCountClient(Protocol):
@@ -139,6 +140,7 @@ def download_comic(
     option_path = settings.option_root / f"jm_{_request_directory_name(normalized)}.yml"
     _write_option_file(option_path, album_dir, settings)
 
+    expected_total: int | None = None
     if settings.progress_mode == "precise":
         try:
             total = page_total_fetcher(normalized)
@@ -150,7 +152,8 @@ def download_comic(
             )
         else:
             if total > 0:
-                (album_dir / ".progress-total").write_text(str(total), encoding="utf-8")
+                expected_total = total
+                (album_dir / ".progress-total").write_text(str(expected_total), encoding="utf-8")
 
     option = create_option(str(option_path))
     if normalized.chapters:
@@ -161,12 +164,20 @@ def download_comic(
         if missing:
             raise ValueError(f"JM{album_id} 不存在章节 {missing[0]}")
         photo_ids = [str(episodes[chapter - 1][0]) for chapter in normalized.chapters]
-        download_photo(photo_ids, option)
+        raw_download_result = tuple(
+            _call_download_api_without_exception_check(download_photo, photo_id, option)
+            for photo_id in photo_ids
+        )
     else:
-        download_album(album_id, option)
+        raw_download_result = _call_download_api_without_exception_check(download_album, album_id, option)
 
-    if not collect_images(album_dir):
+    images = collect_images(album_dir)
+    if not images:
         raise FileNotFoundError(f"No downloaded images found for JM{album_id}: {album_dir}")
+    if expected_total is None:
+        expected_total = _expected_image_count_from_download_result(raw_download_result)
+    if expected_total is not None and len(images) < expected_total:
+        raise RuntimeError(f"JM{album_id} 下载不完整：已下载 {len(images)} / {expected_total} 张图片")
 
     return DownloadResult(album_id=album_id, album_dir=album_dir, option_path=option_path)
 
@@ -392,6 +403,46 @@ def _format_chapter_selection(chapters: tuple[int, ...]) -> str:
 
 def _fetch_album_detail(album_id: str):
     return jmcomic.JmOption.default().new_jm_client(impl="api", cache=None).get_album_detail(album_id)
+
+
+def _call_download_api_without_exception_check(download_api: Callable[..., object], target: object, option: object):
+    """Let JMbot verify final image completeness instead of trusting jmcomic's partial-failure flag."""
+
+    if _supports_check_exception(download_api):
+        return download_api(target, option, check_exception=False)
+    return download_api(target, option)
+
+
+def _supports_check_exception(func: Callable[..., object]) -> bool:
+    try:
+        parameters = signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == "check_exception"
+        for parameter in parameters
+    )
+
+
+def _expected_image_count_from_download_result(result: object) -> int | None:
+    if result is None:
+        return None
+    if isinstance(result, set):
+        total = sum(_entity_image_count(item[0] if isinstance(item, tuple) and item else item) for item in result)
+        return total if total > 0 else None
+    if isinstance(result, tuple) and result:
+        return _expected_image_count_from_download_result(result[0])
+    return _entity_image_count(result) or None
+
+
+def _entity_image_count(entity: object) -> int:
+    page_count = _positive_int(getattr(entity, "page_count", None))
+    if page_count is not None:
+        return page_count
+    try:
+        return len(entity)  # type: ignore[arg-type]
+    except TypeError:
+        return 0
 
 
 def _positive_int(value: object) -> int | None:

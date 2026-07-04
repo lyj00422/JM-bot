@@ -43,7 +43,8 @@ class JmServiceTest(unittest.TestCase):
                 album_dir = root / "downloads" / album_id
                 marker = album_dir / ".progress-total"
                 self.assertEqual(marker.read_text(encoding="utf-8"), "7")
-                Image.new("RGB", (8, 8), (255, 0, 0)).save(album_dir / "001.jpg")
+                for index in range(1, 8):
+                    Image.new("RGB", (8, 8), (255, 0, 0)).save(album_dir / f"{index:03d}.jpg")
 
             download_comic(
                 "123456",
@@ -78,6 +79,88 @@ class JmServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(result.album_id, "123456")
+
+    def test_download_comic_disables_upstream_partial_failure_when_images_are_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+
+            def fake_downloader(album_id, option, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get("check_exception", True):
+                    raise RuntimeError("PartialDownloadFailedException: 部分下载失败")
+                album_dir = root / "downloads" / album_id
+                album_dir.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (8, 8), (255, 0, 0)).save(album_dir / "001.jpg")
+
+            result = download_comic(
+                "123456",
+                DownloadSettings(
+                    download_root=root / "downloads",
+                    option_root=root / "options",
+                    progress_mode="precise",
+                ),
+                create_option=lambda option_path: object(),
+                download_album=fake_downloader,
+                page_total_fetcher=lambda request: 1,
+            )
+
+        self.assertEqual(result.album_id, "123456")
+        self.assertEqual(calls, [{"check_exception": False}])
+
+    def test_download_comic_rejects_incomplete_image_count_after_upstream_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def fake_downloader(album_id, option, **kwargs):
+                album_dir = root / "downloads" / album_id
+                album_dir.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (8, 8), (255, 0, 0)).save(album_dir / "001.jpg")
+
+            with self.assertRaisesRegex(RuntimeError, "下载不完整"):
+                download_comic(
+                    "123456",
+                    DownloadSettings(
+                        download_root=root / "downloads",
+                        option_root=root / "options",
+                        progress_mode="precise",
+                    ),
+                    create_option=lambda option_path: object(),
+                    download_album=fake_downloader,
+                    page_total_fetcher=lambda request: 2,
+                )
+
+    def test_selected_chapter_download_disables_upstream_partial_failure_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+
+            def fake_album_detail(album_id):
+                return type("Album", (), {"episode_list": [("p1", "1", "一")]})()
+
+            def fake_download_photo(photo_ids, option, **kwargs):
+                calls.append(kwargs)
+                if kwargs.get("check_exception", True):
+                    raise RuntimeError("PartialDownloadFailedException: 部分下载失败")
+                album_dir = root / "downloads" / "123456__ch1_pdf"
+                album_dir.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (8, 8), (255, 0, 0)).save(album_dir / "001.jpg")
+
+            result = download_comic(
+                DownloadRequest("123456", chapters=(1,)),
+                DownloadSettings(
+                    download_root=root / "downloads",
+                    option_root=root / "options",
+                    progress_mode="precise",
+                ),
+                create_option=lambda option_path: object(),
+                album_detail_fetcher=fake_album_detail,
+                download_photo=fake_download_photo,
+                page_total_fetcher=lambda request: 1,
+            )
+
+        self.assertEqual(result.album_id, "123456")
+        self.assertEqual(calls, [{"check_exception": False}])
 
     def test_run_album_job_builds_full_zip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,14 +224,13 @@ class JmServiceTest(unittest.TestCase):
                     {"episode_list": [("p1", "1", "一"), ("p2", "2", "二"), ("p3", "3", "三")]},
                 )()
 
-            def fake_download_photo(photo_ids, option):
-                calls.append(tuple(photo_ids))
+            def fake_download_photo(photo_id, option, **kwargs):
+                calls.append((photo_id, kwargs))
                 album_dir = root / "downloads" / "123456__ch1-3_pdf"
                 album_dir.mkdir(parents=True, exist_ok=True)
-                for index, photo_id in enumerate(photo_ids, start=1):
-                    chapter = album_dir / photo_id
-                    chapter.mkdir()
-                    Image.new("RGB", (8, 8), (index, 0, 0)).save(chapter / "001.jpg")
+                chapter = album_dir / photo_id
+                chapter.mkdir()
+                Image.new("RGB", (8, 8), (len(calls), 0, 0)).save(chapter / "001.jpg")
 
             result = run_album_job(
                 DownloadRequest("123456", output_format="pdf", chapters=(1, 3)),
@@ -159,7 +241,7 @@ class JmServiceTest(unittest.TestCase):
                 download_photo=fake_download_photo,
             )
 
-        self.assertEqual(calls, [("p1", "p3")])
+        self.assertEqual(calls, [("p1", {"check_exception": False}), ("p3", {"check_exception": False})])
         self.assertEqual(result.output_paths[0].name, "JM123456（章节1,3）.pdf")
 
     def test_run_album_job_rejects_missing_chapter_number(self):

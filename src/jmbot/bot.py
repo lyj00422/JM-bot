@@ -30,9 +30,11 @@ from jmbot.core.command_service import (
     query_album_search_reply,
     remove_favorite_album,
     queue_summary,
+    search_reply_options,
     task_history,
 )
 from jmbot.core.cleanup import cleanup_album_files
+from jmbot.core.command_feedback import processing_ack_message
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import format_help
 from jmbot.core.jm_service import DownloadRequest, DownloadSettings, download_directory_for_request
@@ -143,6 +145,10 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         max_per_user=CONFIG.history_max_per_user,
     )
 
+    ack_message = processing_ack_message(command)
+    if ack_message is not None:
+        await jm_matcher.send(ack_message)
+
     should_start_worker = await _handle_parsed_command(bot, event, command, target)
     if should_start_worker:
         await _ensure_queue_worker(bot)
@@ -232,7 +238,8 @@ async def _handle_parsed_command(
             page_count=CONFIG.preview_page_count,
             timeout_seconds=CONFIG.preview_timeout_seconds,
         )
-        await jm_matcher.send(message)
+        if message is not None:
+            await jm_matcher.send(message)
         return False
 
     if command.action == "progress":
@@ -249,7 +256,7 @@ async def _handle_parsed_command(
     if command.action == "search":
         if command.keyword is None:
             return False
-        is_author_search = command.search_kind == "author"
+        limit, cover_limit = search_reply_options(command)
         reply = await query_album_search_reply(
             command.keyword,
             kind=command.search_kind,
@@ -257,10 +264,10 @@ async def _handle_parsed_command(
             semaphore=QUERY_SEMAPHORE,
             timeout_seconds=CONFIG.query_timeout_seconds,
             command_prefix=CONFIG.command_prefix,
-            limit=5 if is_author_search else None,
-            cover_limit=5 if is_author_search else 0,
+            limit=limit,
+            cover_limit=cover_limit,
         )
-        if is_author_search and reply.card_items:
+        if command.search_kind == "author" and command.search_view != "text" and reply.card_items:
             card_error = await _send_author_search_card(bot, target, command.keyword, command.page, reply)
             if card_error is not None:
                 await jm_matcher.send(card_error)

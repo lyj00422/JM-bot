@@ -20,11 +20,13 @@ from jmbot.core.command_service import (
     query_album_detail_message,
     query_album_search_reply,
     query_album_search_message,
+    search_reply_options,
     my_tasks_summary,
     remove_favorite_album,
     progress_summary,
     task_history,
 )
+from jmbot.core.parser import JmMessage
 from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.preview_service import CoverResult, PreviewResult
@@ -349,6 +351,21 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("JM111115", reply.message)
         self.assertNotIn("JM111116", reply.message)
 
+    def test_author_search_options_default_to_card_and_text_mode_skips_covers(self):
+        image_limit, image_cover_limit = search_reply_options(
+            JmMessage(action="search", search_kind="author", keyword="author-name")
+        )
+        text_limit, text_cover_limit = search_reply_options(
+            JmMessage(action="search", search_kind="author", keyword="author-name", search_view="text")
+        )
+        site_limit, site_cover_limit = search_reply_options(
+            JmMessage(action="search", search_kind="site", keyword="keyword")
+        )
+
+        self.assertEqual((image_limit, image_cover_limit), (5, 5))
+        self.assertEqual((text_limit, text_cover_limit), (None, 0))
+        self.assertEqual((site_limit, site_cover_limit), (None, 0))
+
     async def test_author_search_reply_paginates_five_items_across_source_pages(self):
         semaphore = asyncio.Semaphore(1)
         calls = []
@@ -456,7 +473,7 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
                 query_func=query,
             )
 
-            self.assertEqual(message, "JM271673 预览已上传。")
+            self.assertIsNone(message)
             self.assertEqual(delivered, [pdf_path])
             self.assertFalse(media_dir.exists())
 
