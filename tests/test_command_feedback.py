@@ -27,6 +27,10 @@ class CommandFeedbackTest(unittest.TestCase):
                 JmMessage(action="search", search_kind="author", keyword="作者名"),
                 "收到，正在处理作者搜索：作者名。",
             ),
+            (
+                JmMessage(action="ranking"),
+                "收到，正在查询排行榜。",
+            ),
         ]
 
         for command, expected in cases:

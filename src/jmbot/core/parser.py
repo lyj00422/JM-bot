@@ -22,11 +22,15 @@ JmAction = Literal[
     "preview",
     "progress",
     "search",
+    "ranking",
+    "ranking_categories",
+    "ranking_invalid",
     "favorite_add",
     "favorite_remove",
     "favorite_list",
     "my_tasks",
     "history",
+    "admin_help",
     "admin_clear",
     "admin_kill",
     "admin_jump",
@@ -51,6 +55,34 @@ class JmMessage:
     page: int = 1
     request_id: int | None = None
     limit: int | None = None
+    ranking_period: str = "all"
+    ranking_category: str = "all"
+    help_topic: str | None = None
+
+
+_RANKING_PERIOD_ALIASES = {
+    "日": "day",
+    "日榜": "day",
+    "周": "week",
+    "周榜": "week",
+    "月": "month",
+    "月榜": "month",
+    "总": "all",
+    "总榜": "all",
+}
+
+_RANKING_CATEGORY_ALIASES = {
+    "全部": "all",
+    "同人": "doujin",
+    "单本": "single",
+    "短篇": "short",
+    "其他": "another",
+    "韩漫": "hanman",
+    "美漫": "meiman",
+    "cosplay": "doujin_cosplay",
+    "3d": "3d",
+    "英文站": "english_site",
+}
 
 
 def parse_jm_command(message: str, command_prefix: str = "/jm") -> JmCommand | None:
@@ -132,6 +164,10 @@ def parse_jm_message(
     if re.match(rf"^\s*{prefix}\s+进度\s*$", message, re.IGNORECASE):
         return JmMessage(action="progress")
 
+    ranking_match = re.match(rf"^\s*{prefix}\s+排行(?:\s+(.*?))?\s*$", message, re.IGNORECASE)
+    if ranking_match is not None:
+        return _parse_ranking(ranking_match.group(1) or "")
+
     search_match = re.match(rf"^\s*{prefix}\s+(搜索|search|作者)\s+(.+?)\s*$", message, re.IGNORECASE)
     if search_match is not None:
         search_kind = "author" if search_match.group(1).lower() == "作者" else "site"
@@ -161,8 +197,10 @@ def parse_jm_message(
     if re.match(rf"^\s*{prefix}\s+队列\s*$", message, re.IGNORECASE):
         return JmMessage(action="queue")
 
-    if re.match(rf"^\s*{prefix}\s+(帮助|help)\s*$", message, re.IGNORECASE):
-        return JmMessage(action="help")
+    help_match = re.match(rf"^\s*{prefix}\s+(?:帮助|help)(?:\s+(.+?))?\s*$", message, re.IGNORECASE)
+    if help_match is not None:
+        topic = help_match.group(1)
+        return JmMessage(action="help", help_topic=topic.strip() if topic else None)
 
     if re.match(rf"^\s*{prefix}\s+(我的|my)\s*$", message, re.IGNORECASE):
         return JmMessage(action="my_tasks")
@@ -188,6 +226,9 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
     """Parse admin-only JM commands that use the dedicated `/jmg` prefix."""
 
     prefix = re.escape(admin_command_prefix)
+    if re.match(rf"^\s*{prefix}\s+(?:帮助|help)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="admin_help")
+
     patterns: list[tuple[str, JmAction, bool]] = [
         (rf"^\s*{prefix}\s+kill\s+全部\s+([0-9]+)\s*$", "admin_kill", True),
         (rf"^\s*{prefix}\s+kill\s+([0-9]+)\s*$", "admin_kill", False),
@@ -243,6 +284,53 @@ def _parse_chapters(value: str) -> tuple[int, ...]:
         else:
             return ()
     return tuple(sorted(chapters))
+
+
+def _parse_ranking(value: str) -> JmMessage:
+    tokens = value.split()
+    view = "default"
+    if tokens and tokens[0].casefold() == "文本":
+        view = "text"
+        tokens.pop(0)
+
+    if tokens == ["类别"]:
+        return JmMessage(action="ranking_categories")
+
+    page = 1
+    if tokens and tokens[-1].isdigit():
+        page = int(tokens.pop())
+        if page < 1:
+            return JmMessage(action="ranking_invalid")
+
+    period = "all"
+    category = "all"
+    period_seen = False
+    category_seen = False
+    keyword_parts: list[str] = []
+    for token in tokens:
+        period_value = _RANKING_PERIOD_ALIASES.get(token.casefold())
+        category_value = _RANKING_CATEGORY_ALIASES.get(token.casefold())
+        if period_value is not None:
+            if period_seen:
+                return JmMessage(action="ranking_invalid")
+            period = period_value
+            period_seen = True
+        elif category_value is not None:
+            if category_seen:
+                return JmMessage(action="ranking_invalid")
+            category = category_value
+            category_seen = True
+        else:
+            keyword_parts.append(token)
+
+    return JmMessage(
+        action="ranking",
+        search_view=view,
+        keyword=" ".join(keyword_parts) or None,
+        page=page,
+        ranking_period=period,
+        ranking_category=category,
+    )
 
 
 def _parse_search_keyword_and_page(value: str) -> tuple[str | None, int]:

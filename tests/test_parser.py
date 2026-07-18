@@ -220,6 +220,47 @@ class ParseJmCommandTest(unittest.TestCase):
         self.assertIsNone(parse_jm_message("/jm 搜索 测试 0"))
         self.assertIsNone(parse_jm_message("/jm 作者"))
 
+    def test_parse_ranking_defaults_and_free_filter_order(self):
+        default = parse_jm_message("/jm 排行")
+        first = parse_jm_message("/jm 排行 全彩 韩漫 月榜 2")
+        second = parse_jm_message("/jm 排行 韩漫 全彩 月榜 2")
+
+        self.assertIsNotNone(default)
+        self.assertEqual(default.action, "ranking")
+        self.assertEqual(default.ranking_period, "all")
+        self.assertEqual(default.ranking_category, "all")
+        self.assertEqual(default.page, 1)
+        self.assertEqual(first, second)
+        self.assertIsNotNone(first)
+        self.assertEqual(first.keyword, "全彩")
+        self.assertEqual(first.ranking_category, "hanman")
+        self.assertEqual(first.ranking_period, "month")
+        self.assertEqual(first.page, 2)
+
+    def test_parse_ranking_aliases_views_and_errors(self):
+        self.assertEqual(parse_jm_message("/jm 排行 日").ranking_period, "day")
+        self.assertEqual(parse_jm_message("/jm 排行 周榜").ranking_period, "week")
+        self.assertEqual(parse_jm_message("/jm 排行 COSPLAY 周榜").ranking_category, "doujin_cosplay")
+        self.assertEqual(parse_jm_message("/jm 排行 3d 总").ranking_category, "3d")
+
+        text = parse_jm_message("/jm 排行 文本 韩漫 周榜")
+        categories = parse_jm_message("/jm 排行 类别")
+        nonleading_text = parse_jm_message("/jm 排行 韩漫 文本 周榜")
+
+        self.assertEqual(text.search_view, "text")
+        self.assertEqual(categories.action, "ranking_categories")
+        self.assertEqual((nonleading_text.search_view, nonleading_text.keyword), ("default", "文本"))
+        for message in ("/jm 排行 日榜 周榜", "/jm 排行 韩漫 美漫", "/jm 排行 0"):
+            with self.subTest(message=message):
+                self.assertEqual(parse_jm_message(message).action, "ranking_invalid")
+
+    def test_parse_layered_and_admin_help(self):
+        self.assertIsNone(parse_jm_message("/jm help").help_topic)
+        self.assertEqual(parse_jm_message("/jm 帮助 排行").help_topic, "排行")
+        self.assertEqual(parse_jm_message("/jm 帮助 unknown").help_topic, "unknown")
+        self.assertEqual(parse_jm_admin_message("/jmg 帮助").action, "admin_help")
+        self.assertEqual(parse_jm_admin_message("/jmg help").action, "admin_help")
+
     def test_removed_download_pagination_command_is_not_parsed(self):
         self.assertIsNone(parse_jm_message("/jm 下载 2"))
 
