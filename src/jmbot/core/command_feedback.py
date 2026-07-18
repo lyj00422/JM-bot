@@ -16,4 +16,6 @@ def processing_ack_message(command: JmMessage) -> str | None:
         if command.search_kind == "author":
             return f"收到，正在处理作者搜索：{command.keyword}。"
         return f"收到，正在搜索：{command.keyword}。"
+    if command.action == "ranking":
+        return "收到，正在查询排行榜。"
     return None

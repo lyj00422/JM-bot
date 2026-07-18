@@ -18,6 +18,7 @@ from jmbot.core.command_service import (
     deliver_cover,
     deliver_preview,
     query_album_detail_message,
+    query_album_ranking_reply,
     query_album_search_reply,
     query_album_search_message,
     search_reply_options,
@@ -27,7 +28,7 @@ from jmbot.core.command_service import (
     task_history,
 )
 from jmbot.core.parser import JmMessage
-from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
+from jmbot.core.catalog_service import AlbumDetail, RankingQuery, RankingResult, SearchItem, SearchResult
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.preview_service import CoverResult, PreviewResult
 from jmbot.core.persistent_queue import PersistentAlbumQueue
@@ -321,6 +322,55 @@ class CatalogCommandServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [("测试", "site", 2, 20)])
         self.assertIn("搜索「测试」", message)
         self.assertIn("JM111111 搜索结果", message)
+
+    async def test_ranking_reply_card_text_and_failure(self):
+        query = RankingQuery(keyword="全彩", period="week", category="hanman")
+        result = RankingResult(
+            query,
+            1,
+            2,
+            6,
+            tuple(SearchItem(str(111110 + index), f"Title {index}", ()) for index in range(1, 6)),
+        )
+
+        def success(value, *, timeout_seconds):
+            self.assertEqual((value, timeout_seconds), (query, 20))
+            return result
+
+        card = await query_album_ranking_reply(
+            query,
+            view="default",
+            semaphore=asyncio.Semaphore(1),
+            timeout_seconds=20,
+            query_func=success,
+        )
+        text = await query_album_ranking_reply(
+            query,
+            view="text",
+            semaphore=asyncio.Semaphore(1),
+            timeout_seconds=20,
+            query_func=success,
+        )
+
+        self.assertEqual(card.cover_album_ids, ("111111", "111112", "111113", "111114", "111115"))
+        self.assertEqual(text.cover_album_ids, ())
+        self.assertIn("1. JM111111", card.message)
+        self.assertIn("1. JM111111", text.message)
+
+        def failure(value, *, timeout_seconds):
+            raise RuntimeError("secret upstream failure")
+
+        failed = await query_album_ranking_reply(
+            query,
+            view="default",
+            semaphore=asyncio.Semaphore(1),
+            timeout_seconds=20,
+            query_func=failure,
+        )
+
+        self.assertEqual(failed.message, "排行榜查询暂时不可用，请稍后重试。")
+        self.assertIsNone(failed.result)
+        self.assertNotIn("secret", failed.message)
 
     async def test_author_search_reply_limits_to_five_and_includes_cover_ids(self):
         semaphore = asyncio.Semaphore(1)

@@ -6,7 +6,7 @@ from textwrap import wrap
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from jmbot.core.catalog_service import SearchResult
+from jmbot.core.catalog_service import RankingResult, SearchItem, SearchResult
 
 
 def build_search_result_card(
@@ -18,13 +18,59 @@ def build_search_result_card(
 ) -> Path:
     """Render search result items and their covers into one PNG card."""
 
-    items = result.items[: len(cover_paths)]
+    title = f"作者「{result.keyword}」作品" if result.kind == "author" else f"搜索「{result.keyword}」"
+    return _build_result_card(
+        result.items,
+        cover_paths,
+        output_path,
+        title=title,
+        page=result.page,
+        page_count=max(result.page_count, result.page),
+        numbers=range(1, len(result.items) + 1),
+        command_prefix=command_prefix,
+    )
+
+
+def build_ranking_result_card(
+    result: RankingResult,
+    cover_paths: Sequence[str | Path],
+    output_path: str | Path,
+    *,
+    title: str,
+    command_prefix: str = "/jm",
+) -> Path:
+    """Render ranked items with global rank numbers and total count."""
+
+    start = (result.page - 1) * result.query.page_size + 1
+    return _build_result_card(
+        result.items,
+        cover_paths,
+        output_path,
+        title=f"{title} · 共 {result.total} 条",
+        page=result.page,
+        page_count=max(result.page_count, result.page),
+        numbers=range(start, start + len(result.items)),
+        command_prefix=command_prefix,
+    )
+
+
+def _build_result_card(
+    source_items: Sequence[SearchItem],
+    cover_paths: Sequence[str | Path],
+    output_path: str | Path,
+    *,
+    title: str,
+    page: int,
+    page_count: int,
+    numbers: Sequence[int] | range,
+    command_prefix: str,
+) -> Path:
+    items = source_items[: len(cover_paths)]
     if not items:
-        raise ValueError("at least one search item is required")
+        raise ValueError("at least one result item is required")
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-
     row_height = 210
     width = 960
     padding = 28
@@ -35,25 +81,36 @@ def build_search_result_card(
     title_font = _font(30)
     body_font = _font(23)
     small_font = _font(19)
+    draw.text(
+        (padding, 22),
+        f"{title}  第 {page} / {page_count} 页",
+        fill=(28, 31, 35),
+        font=title_font,
+    )
 
-    title = f"作者「{result.keyword}」作品" if result.kind == "author" else f"搜索「{result.keyword}」"
-    draw.text((padding, 22), f"{title}  第 {result.page} / {max(result.page_count, result.page)} 页", fill=(28, 31, 35), font=title_font)
-
-    for index, (item, cover_path) in enumerate(zip(items, cover_paths), start=1):
-        top = header_height + (index - 1) * row_height
-        draw.rounded_rectangle((padding, top + 10, width - padding, top + row_height - 10), radius=12, fill=(255, 255, 255), outline=(222, 224, 226))
-
-        cover = _fit_cover(cover_path, (124, 176))
-        image.paste(cover, (padding + 18, top + 27))
+    for row_index, (number, item, cover_path) in enumerate(zip(numbers, items, cover_paths)):
+        top = header_height + row_index * row_height
+        draw.rounded_rectangle(
+            (padding, top + 10, width - padding, top + row_height - 10),
+            radius=12,
+            fill=(255, 255, 255),
+            outline=(222, 224, 226),
+        )
+        image.paste(_fit_cover(cover_path, (124, 176)), (padding + 18, top + 27))
 
         text_x = padding + 166
-        draw.text((text_x, top + 28), f"{index}. JM{item.album_id}", fill=(42, 84, 130), font=body_font)
+        draw.text((text_x, top + 28), f"{number}. JM{item.album_id}", fill=(42, 84, 130), font=body_font)
         title_lines = wrap(item.title or item.album_id, width=28)[:2]
         for line_index, line in enumerate(title_lines):
             draw.text((text_x, top + 66 + line_index * 30), line, fill=(25, 28, 32), font=body_font)
         if item.tags:
             draw.text((text_x, top + 130), " / ".join(item.tags[:6]), fill=(91, 96, 102), font=small_font)
-        draw.text((text_x, top + 162), f"下载：{command_prefix} {item.album_id}    详情：{command_prefix} 详情 {item.album_id}", fill=(64, 66, 70), font=small_font)
+        draw.text(
+            (text_x, top + 162),
+            f"下载：{command_prefix} {item.album_id}    详情：{command_prefix} 详情 {item.album_id}",
+            fill=(64, 66, 70),
+            font=small_font,
+        )
 
     image.save(output, format="PNG")
     return output

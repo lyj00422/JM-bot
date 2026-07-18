@@ -2,48 +2,190 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from jmbot.core.catalog_service import AlbumDetail, SearchResult
+from jmbot.core.catalog_service import (
+    AlbumDetail,
+    RANKING_CATEGORY_LABELS,
+    RANKING_PERIOD_LABELS,
+    RankingQuery,
+    RankingResult,
+    SearchResult,
+)
 from jmbot.core.persistent_queue import AlbumQueueJob
 from jmbot.core.user_store import FavoriteItem
 
 
-def format_help(command_prefix: str = "/jm", admin_command_prefix: str = "/jmg") -> str:
-    """Return compact help for commands implemented today."""
+def format_help(
+    command_prefix: str = "/jm",
+    admin_command_prefix: str = "/jmg",
+    *,
+    topic: str | None = None,
+) -> str:
+    """Return the short help index or one bounded topic page."""
 
     prefix = command_prefix
-    admin_prefix = admin_command_prefix
+    topics = {
+        "查找": [
+            "查找漫画：",
+            f"{prefix} 搜索 关键词",
+            f"{prefix} 作者 作者名",
+            f"{prefix} 作者 文本 作者名",
+            f"{prefix} 详情 123456",
+            f"{prefix} 封面 123456",
+        ],
+        "排行": [
+            "排行榜：",
+            f"{prefix} 排行 [文本] [关键词和/或类别] [榜单] [页码]",
+            "榜单：日榜｜周榜｜月榜｜总榜（默认总榜）",
+            f"{prefix} 排行 韩漫 周榜 2",
+            f"{prefix} 排行 全彩 韩漫 月榜",
+            f"{prefix} 排行 类别",
+        ],
+        "下载": [
+            "下载与预览：",
+            f"{prefix} 123456",
+            f"{prefix} 123456 zip",
+            f"{prefix} 123456 章节 1,3-5",
+            f"{prefix} 预览 123456",
+        ],
+        "收藏": [
+            "收藏：",
+            f"{prefix} 收藏 123456",
+            f"{prefix} 取消收藏 123456",
+            f"{prefix} 我的收藏",
+        ],
+        "任务": [
+            "任务：",
+            f"{prefix} 进度 [123456]",
+            f"{prefix} 撤回 123456",
+            f"{prefix} 队列",
+            f"{prefix} 我的",
+            f"{prefix} 历史 5",
+            f"{prefix} 历史 失败 5",
+        ],
+    }
+    if topic is not None:
+        return "\n".join(topics[topic]) if topic in topics else "可用帮助主题：查找｜排行｜下载｜收藏｜任务"
     return "\n".join(
         [
-            "JMbot 可用命令：",
-            f"{prefix} 123456 - 加入下载队列",
-            f"{prefix} 详情 123456 - 查看漫画详情",
-            f"{prefix} 搜索 关键词 - 搜索漫画",
-            f"{prefix} 作者 作者名 - 搜索作者作品",
-            f"{prefix} 作者 文本 作者名 - 文本搜索作者作品",
-            f"{prefix} 收藏 123456 - 收藏漫画",
-            f"{prefix} 我的收藏 - 查看收藏",
-            f"{prefix} 封面 123456 - 发送封面图片",
-            f"{prefix} 预览 123456 - 上传前 10 页预览 PDF",
-            f"{prefix} 123456 zip - 下载 ZIP",
-            f"{prefix} 123456 章节 1,3-5 - 下载指定章节",
-            f"{prefix} 进度 123456 - 查看任务进度",
-            f"{prefix} 进度 - 查看最近活动任务进度",
-            f"{prefix} 撤回 123456 - 撤回自己的排队任务",
-            f"{prefix} 队列 - 查看当前队列",
-            f"{prefix} 我的 - 查看自己的当前任务",
-            f"{prefix} 历史 5 - 查看自己的最近任务",
-            f"{prefix} 历史 失败 5 - 查看自己的失败任务",
-            f"{prefix} 帮助 - 查看本帮助",
-            "",
-            "管理员：",
-            f"{admin_prefix} 清空",
-            f"{admin_prefix} kill 123456",
-            f"{admin_prefix} kill 全部 123456",
-            f"{admin_prefix} 插队 123456",
-            f"{admin_prefix} 失败",
-            f"{admin_prefix} 失败 最近 5",
-            f"{admin_prefix} 失败 21",
-            f"{admin_prefix} 失败 删除 21",
+            "JMbot 帮助：",
+            f"{prefix} 帮助 查找  - 搜索、作者、详情、封面",
+            f"{prefix} 帮助 排行  - 排行榜、分类和筛选",
+            f"{prefix} 帮助 下载  - PDF、ZIP、章节、预览",
+            f"{prefix} 帮助 收藏  - 收藏管理",
+            f"{prefix} 帮助 任务  - 进度、队列、撤回、历史",
+            f"{admin_command_prefix} 帮助      - 管理员命令",
+        ]
+    )
+
+
+def format_admin_help(admin_command_prefix: str = "/jmg") -> str:
+    prefix = admin_command_prefix
+    return "\n".join(
+        [
+            "JMbot 管理员命令：",
+            f"{prefix} 清空",
+            f"{prefix} kill 123456",
+            f"{prefix} kill 全部 123456",
+            f"{prefix} 插队 123456",
+            f"{prefix} 失败",
+            f"{prefix} 失败 最近 5",
+            f"{prefix} 失败 21",
+            f"{prefix} 失败 删除 21",
+        ]
+    )
+
+
+def ranking_title(query: RankingQuery) -> str:
+    parts = [RANKING_CATEGORY_LABELS[query.category], RANKING_PERIOD_LABELS[query.period]]
+    if query.keyword:
+        parts.append(f"关键词：{query.keyword}")
+    return " · ".join(parts)
+
+
+def build_ranking_command(
+    query: RankingQuery,
+    command_prefix: str = "/jm",
+    *,
+    page: int | None = None,
+    text_mode: bool = False,
+) -> str:
+    parts = [command_prefix, "排行"]
+    if text_mode:
+        parts.append("文本")
+    if query.keyword:
+        parts.append(query.keyword)
+    if query.category != "all":
+        parts.append(RANKING_CATEGORY_LABELS[query.category])
+    parts.extend([RANKING_PERIOD_LABELS[query.period], str(page or query.page)])
+    return " ".join(parts)
+
+
+def format_ranking_result(
+    result: RankingResult,
+    command_prefix: str = "/jm",
+    *,
+    text_mode: bool = False,
+) -> str:
+    title = ranking_title(result.query)
+    if not result.items:
+        if result.page_count and result.page > result.page_count:
+            return f"{title}只有 {result.page_count} 页，请换一个页码。"
+        return f"{title}没有结果，可以调整关键词、分类或榜单再试。"
+
+    page_count = max(result.page_count, result.page)
+    lines = [f"{title}：第 {result.page} / {page_count} 页，共 {result.total} 条"]
+    rank_start = (result.page - 1) * result.query.page_size
+    for offset, item in enumerate(result.items, start=1):
+        lines.append(f"{rank_start + offset}. JM{item.album_id} {item.title}")
+        if item.tags:
+            lines.append(f"   标签：{' / '.join(item.tags[:6])}")
+    if result.page < result.page_count:
+        lines.extend(
+            [
+                "",
+                "下一页：" + build_ranking_command(
+                    result.query,
+                    command_prefix,
+                    page=result.page + 1,
+                    text_mode=text_mode,
+                ),
+            ]
+        )
+    return "\n".join(lines)
+
+
+def format_ranking_card_commands(result: RankingResult, command_prefix: str = "/jm") -> str:
+    lines = ["可复制命令："]
+    lines.extend(f"JM{item.album_id} 下载：{command_prefix} {item.album_id}" for item in result.items)
+    if result.page < result.page_count:
+        lines.append(
+            "下一页：" + build_ranking_command(
+                result.query,
+                command_prefix,
+                page=result.page + 1,
+            )
+        )
+    return "\n".join(lines)
+
+
+def format_ranking_categories(command_prefix: str = "/jm") -> str:
+    return "\n".join(
+        [
+            "排行榜分类：",
+            "全部｜同人｜单本｜短篇｜其他｜韩漫｜美漫｜Cosplay｜3D｜英文站",
+            "榜单：日榜｜周榜｜月榜｜总榜",
+            f"例如：{command_prefix} 排行 全彩 韩漫 周榜 2",
+        ]
+    )
+
+
+def format_ranking_usage(command_prefix: str = "/jm") -> str:
+    return "\n".join(
+        [
+            "排行榜格式：",
+            f"{command_prefix} 排行 [文本] [关键词和/或类别] [榜单] [页码]",
+            f"例如：{command_prefix} 排行 韩漫 周榜 2",
+            f"分类列表：{command_prefix} 排行 类别",
         ]
     )
 

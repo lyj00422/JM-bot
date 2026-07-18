@@ -4,7 +4,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from jmbot.core.catalog_service import AlbumDetail, SearchKind, SearchResult, get_album_detail, search_albums
+from jmbot.core.catalog_service import (
+    AlbumDetail,
+    RankingQuery,
+    RankingResult,
+    SearchKind,
+    SearchResult,
+    get_album_detail,
+    get_ranking_page,
+    search_albums,
+)
 from jmbot.core.job_executor import JobTimeoutError, run_with_timeout
 from jmbot.core.preview_service import CoverResult, PreviewResult, build_preview, download_cover
 
@@ -46,6 +55,14 @@ def query_album_search(
         keyword,
         kind=kind,
         page=page,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def query_album_ranking(query: RankingQuery, *, timeout_seconds: float) -> RankingResult:
+    return run_query_with_timeout(
+        get_ranking_page,
+        query,
         timeout_seconds=timeout_seconds,
     )
 

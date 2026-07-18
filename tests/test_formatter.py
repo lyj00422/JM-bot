@@ -1,14 +1,19 @@
 import unittest
 
-from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchResult
+from jmbot.core.catalog_service import AlbumDetail, RankingQuery, RankingResult, SearchItem, SearchResult
 from jmbot.core.formatter import (
     format_album_detail,
+    format_admin_help,
     format_admin_failed_detail,
     format_admin_failed_tasks,
     format_favorite_list,
     format_help,
     format_query_failed,
     format_queue_summary,
+    format_ranking_card_commands,
+    format_ranking_categories,
+    format_ranking_result,
+    format_ranking_usage,
     format_search_result,
     format_task_failed,
     format_task_history,
@@ -19,44 +24,35 @@ from jmbot.core.user_store import FavoriteItem
 
 
 class FormatterTest(unittest.TestCase):
-    def test_format_help_lists_existing_user_commands(self):
-        message = format_help("/jm")
-
-        self.assertIn("/jm 123456", message)
-        self.assertIn("/jm 撤回 123456", message)
-        self.assertIn("/jm 队列", message)
-        self.assertIn("/jm 我的", message)
-        self.assertIn("/jm 历史", message)
-        self.assertIn("/jm 历史 失败", message)
-        self.assertIn("/jm 进度", message)
-        self.assertIn("/jm 帮助", message)
-        self.assertNotIn("/jm 重试", message)
-        self.assertNotIn("好友申请", message)
-
-    def test_format_help_lists_existing_admin_commands(self):
+    def test_help_index_is_short_and_topic_based(self):
         message = format_help("/jm", "/jmg")
 
-        self.assertIn("/jmg 清空", message)
-        self.assertIn("/jmg kill 123456", message)
-        self.assertIn("/jmg kill 全部 123456", message)
-        self.assertIn("/jmg 插队 123456", message)
-        self.assertIn("/jmg 失败", message)
-        self.assertIn("/jmg 失败 21", message)
-        self.assertNotIn("/jm 管理", message)
+        self.assertLessEqual(len([line for line in message.splitlines() if line.strip()]), 7)
+        self.assertIn("/jm 帮助 查找", message)
+        self.assertIn("/jm 帮助 排行", message)
+        self.assertIn("/jmg 帮助", message)
+        self.assertNotIn("kill 123456", message)
 
-    def test_format_help_lists_detail_and_search_features(self):
-        message = format_help("/jm")
+    def test_public_help_topics_are_bounded_and_specific(self):
+        expectations = {
+            "查找": "/jm 搜索 关键词",
+            "排行": "/jm 排行 [文本]",
+            "下载": "/jm 123456 zip",
+            "收藏": "/jm 我的收藏",
+            "任务": "/jm 撤回 123456",
+        }
+        for topic, command in expectations.items():
+            with self.subTest(topic=topic):
+                message = format_help("/jm", "/jmg", topic=topic)
+                self.assertLessEqual(len([line for line in message.splitlines() if line.strip()]), 10)
+                self.assertIn(command, message)
 
-        self.assertIn("/jm 详情 123456", message)
-        self.assertIn("/jm 封面 123456", message)
-        self.assertIn("/jm 预览 123456", message)
-        self.assertIn("/jm 123456 zip", message)
-        self.assertIn("/jm 进度 123456", message)
-        self.assertIn("/jm 搜索 关键词", message)
-        self.assertIn("/jm 作者 作者名", message)
-        self.assertIn("/jm 收藏 123456", message)
-        self.assertIn("/jm 我的收藏", message)
-        self.assertNotIn("/jm 下载 1", message)
+    def test_unknown_and_admin_help_are_separate(self):
+        self.assertIn("查找｜排行｜下载｜收藏｜任务", format_help(topic="unknown"))
+        admin = format_admin_help("/jmg")
+        self.assertLessEqual(len([line for line in admin.splitlines() if line.strip()]), 10)
+        self.assertIn("/jmg kill 123456", admin)
+        self.assertIn("/jmg 失败 删除 21", admin)
 
     def test_format_album_detail_limits_tags_and_chapters(self):
         detail = AlbumDetail(
@@ -166,6 +162,53 @@ class FormatterTest(unittest.TestCase):
         self.assertIn("没有搜到「不存在」", message)
         self.assertIn("换个关键词", message)
         self.assertNotIn("未知", message)
+
+    def test_ranking_result_uses_global_rank_and_preserves_filters(self):
+        query = RankingQuery(keyword="全彩", period="week", category="hanman", page=2)
+        result = RankingResult(
+            query,
+            2,
+            3,
+            12,
+            (SearchItem("111111", "作品一", ("全彩",)),),
+        )
+
+        message = format_ranking_result(result, "/jm", text_mode=True)
+
+        self.assertIn("韩漫 · 周榜 · 关键词：全彩", message)
+        self.assertIn("第 2 / 3 页，共 12 条", message)
+        self.assertIn("6. JM111111 作品一", message)
+        self.assertIn("下一页：/jm 排行 文本 全彩 韩漫 周榜 3", message)
+
+    def test_ranking_empty_out_of_range_categories_and_usage(self):
+        empty_query = RankingQuery(keyword="不存在")
+        high_query = RankingQuery(period="month", page=4)
+
+        self.assertIn(
+            "没有结果",
+            format_ranking_result(RankingResult(empty_query, 1, 0, 0, ())),
+        )
+        self.assertIn(
+            "只有 3 页",
+            format_ranking_result(RankingResult(high_query, 4, 3, 15, ())),
+        )
+        self.assertIn("Cosplay｜3D｜英文站", format_ranking_categories("/jm"))
+        self.assertIn("/jm 排行 [文本]", format_ranking_usage("/jm"))
+
+    def test_ranking_card_commands_include_downloads_and_next_page(self):
+        query = RankingQuery(period="day")
+        result = RankingResult(
+            query,
+            1,
+            2,
+            6,
+            (SearchItem("111111", "作品一", ()),),
+        )
+
+        message = format_ranking_card_commands(result, "/jm")
+
+        self.assertIn("JM111111 下载：/jm 111111", message)
+        self.assertIn("下一页：/jm 排行 日榜 2", message)
 
     def test_format_favorite_list(self):
         message = format_favorite_list(

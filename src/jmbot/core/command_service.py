@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jmbot.core.catalog_service import AlbumDetail, SearchItem, SearchKind, SearchResult
+from jmbot.core.catalog_service import (
+    AlbumDetail,
+    RankingQuery,
+    RankingResult,
+    SearchItem,
+    SearchKind,
+    SearchResult,
+)
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_album_detail,
@@ -20,12 +27,19 @@ from jmbot.core.formatter import (
     format_my_tasks,
     format_query_failed,
     format_queue_summary,
+    format_ranking_result,
     format_search_result,
     format_task_history,
 )
 from jmbot.core.persistent_queue import DestinationType, DuplicateAlbumJobError, PersistentAlbumQueue
 from jmbot.core.preview_service import CoverResult, PreviewResult
-from jmbot.core.query_executor import query_album_detail, query_album_search, query_cover, query_preview
+from jmbot.core.query_executor import (
+    query_album_detail,
+    query_album_ranking,
+    query_album_search,
+    query_cover,
+    query_preview,
+)
 from jmbot.core.parser import JmMessage
 from jmbot.core.user_store import UserDataStore
 
@@ -33,6 +47,7 @@ from jmbot.core.user_store import UserDataStore
 LOGGER = logging.getLogger(__name__)
 DetailQuery = Callable[..., AlbumDetail]
 SearchQuery = Callable[..., SearchResult]
+RankingQueryFunc = Callable[..., RankingResult]
 CoverQuery = Callable[..., CoverResult]
 PreviewQuery = Callable[..., PreviewResult]
 MediaDeliverer = Callable[[Path], Awaitable[None]]
@@ -53,6 +68,15 @@ class SearchReply:
     cover_album_ids: tuple[str, ...] = ()
     card_items: tuple[SearchItem, ...] = ()
     card_result: SearchResult | None = None
+
+
+@dataclass(frozen=True)
+class RankingReply:
+    """Formatted ranking reply plus cover IDs for card delivery."""
+
+    message: str
+    result: RankingResult | None = None
+    cover_album_ids: tuple[str, ...] = ()
 
 
 def search_reply_options(command: JmMessage) -> tuple[int | None, int]:
@@ -220,6 +244,33 @@ async def query_album_search_reply(
         card_items,
         card_result,
     )
+
+
+async def query_album_ranking_reply(
+    query: RankingQuery,
+    *,
+    view: str,
+    semaphore: asyncio.Semaphore,
+    timeout_seconds: int,
+    command_prefix: str = "/jm",
+    query_func: RankingQueryFunc = query_album_ranking,
+) -> RankingReply:
+    """Fetch, format, and prepare one ranking page without blocking the event loop."""
+
+    try:
+        async with semaphore:
+            result = await asyncio.to_thread(
+                query_func,
+                query,
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        LOGGER.exception("Ranking query failed for %s", query)
+        return RankingReply(format_query_failed("排行榜"))
+
+    message = format_ranking_result(result, command_prefix, text_mode=view == "text")
+    cover_album_ids = () if view == "text" else tuple(item.album_id for item in result.items)
+    return RankingReply(message, result, cover_album_ids)
 
 
 def _query_author_search_card_page(
