@@ -12,6 +12,7 @@ scripts/local.env
 docs/superpowers/
 .superpowers/
 .codex/
+.worktrees/
 
 logs/
 data/downloads/
