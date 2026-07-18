@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import tempfile
+from pathlib import Path
 import nonebot
 from nonebot import get_driver, on_message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
 from nonebot.rule import Rule
 
+from jmbot.core.catalog_service import RankingQuery
 from jmbot.config import load_config
 from jmbot.core.command_service import (
     QueueTarget,
@@ -26,6 +29,7 @@ from jmbot.core.command_service import (
     my_tasks_summary,
     prune_history,
     progress_summary,
+    query_album_ranking_reply,
     query_album_detail_message,
     query_album_search_reply,
     remove_favorite_album,
@@ -36,7 +40,14 @@ from jmbot.core.command_service import (
 from jmbot.core.cleanup import cleanup_album_files
 from jmbot.core.command_feedback import processing_ack_message
 from jmbot.core.detail_cache import DetailCache
-from jmbot.core.formatter import format_help
+from jmbot.core.formatter import (
+    format_admin_help,
+    format_help,
+    format_ranking_card_commands,
+    format_ranking_categories,
+    format_ranking_usage,
+    ranking_title,
+)
 from jmbot.core.jm_service import DownloadRequest, DownloadSettings, download_directory_for_request
 from jmbot.core.pdf_builder import collect_images
 from jmbot.core.job_executor import run_album_job_with_timeout
@@ -52,7 +63,7 @@ from jmbot.core.sender import (
     upload_group_pdf,
     upload_private_pdf,
 )
-from jmbot.core.search_card import build_search_result_card
+from jmbot.core.search_card import build_ranking_result_card, build_search_result_card
 from jmbot.core.user_store import UserDataStore
 
 
@@ -188,7 +199,48 @@ async def _handle_parsed_command(
         return False
 
     if command.action == "help":
-        await jm_matcher.send(format_help(CONFIG.command_prefix, CONFIG.admin_command_prefix))
+        await jm_matcher.send(
+            format_help(
+                CONFIG.command_prefix,
+                CONFIG.admin_command_prefix,
+                topic=command.help_topic,
+            )
+        )
+        return False
+
+    if command.action == "ranking_invalid":
+        await jm_matcher.send(format_ranking_usage(CONFIG.command_prefix))
+        return False
+
+    if command.action == "ranking_categories":
+        await jm_matcher.send(format_ranking_categories(CONFIG.command_prefix))
+        return False
+
+    if command.action == "ranking":
+        query = RankingQuery(
+            keyword=command.keyword,
+            period=command.ranking_period,
+            category=command.ranking_category,
+            page=command.page,
+        )
+        reply = await query_album_ranking_reply(
+            query,
+            view=command.search_view,
+            semaphore=QUERY_SEMAPHORE,
+            timeout_seconds=CONFIG.query_timeout_seconds,
+            command_prefix=CONFIG.command_prefix,
+        )
+        if command.search_view == "text" or reply.result is None or not reply.cover_album_ids:
+            await jm_matcher.send(reply.message)
+            return False
+
+        card_error = await _send_ranking_card(bot, target, reply)
+        if card_error is not None:
+            await jm_matcher.send(reply.message)
+        else:
+            await jm_matcher.send(
+                format_ranking_card_commands(reply.result, CONFIG.command_prefix)
+            )
         return False
 
     if command.action == "detail":
@@ -332,6 +384,10 @@ async def _handle_parsed_command(
         await jm_matcher.send("你没有 JM 管理权限。")
         return False
 
+    if command.action == "admin_help":
+        await jm_matcher.send(format_admin_help(CONFIG.admin_command_prefix))
+        return False
+
     if command.action == "admin_clear":
         await jm_matcher.send(admin_clear_queue(ALBUM_QUEUE))
         return False
@@ -418,6 +474,47 @@ async def _send_author_search_card(bot: Bot, target: QueueTarget, keyword: str, 
         return "作者作品卡片生成失败，请稍后重试。"
     finally:
         await asyncio.to_thread(shutil.rmtree, media_dir, True)
+    return None
+
+
+async def _send_ranking_card(bot: Bot, target: QueueTarget, reply) -> str | None:
+    media_root = CONFIG.preview_root / "ranking"
+    media_root.mkdir(parents=True, exist_ok=True)
+    media_dir = Path(tempfile.mkdtemp(prefix=f"{target.user_id}-", dir=media_root))
+    cover_paths = []
+    try:
+        async with QUERY_SEMAPHORE:
+            for album_id in reply.cover_album_ids:
+                result = await asyncio.to_thread(
+                    query_cover,
+                    album_id,
+                    CONFIG.preview_root,
+                    timeout_seconds=CONFIG.query_timeout_seconds,
+                )
+                try:
+                    target_cover = media_dir / f"{album_id}{result.cover_path.suffix}"
+                    await asyncio.to_thread(shutil.copyfile, result.cover_path, target_cover)
+                    cover_paths.append(target_cover)
+                finally:
+                    await asyncio.to_thread(shutil.rmtree, result.media_dir, True)
+
+        card_path = await asyncio.to_thread(
+            build_ranking_result_card,
+            reply.result,
+            cover_paths,
+            media_dir / "ranking.png",
+            title=ranking_title(reply.result.query),
+            command_prefix=CONFIG.command_prefix,
+        )
+        await _send_cover(bot, target, card_path)
+    except Exception:
+        return "排行榜卡片生成失败，已切换为文本结果。"
+    finally:
+        await asyncio.to_thread(shutil.rmtree, media_dir, True)
+        try:
+            media_root.rmdir()
+        except OSError:
+            pass
     return None
 
 
