@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from jmbot.core.catalog_service import SearchItem, SearchResult
-from jmbot.core.search_card import build_search_result_card
+from jmbot.core.catalog_service import RankingQuery, RankingResult, SearchItem, SearchResult
+from jmbot.core.search_card import build_ranking_result_card, build_search_result_card
 
 
 class SearchCardTest(unittest.TestCase):
@@ -43,6 +43,42 @@ class SearchCardTest(unittest.TestCase):
                 self.assertGreater(red, 180)
                 self.assertLess(green, 90)
                 self.assertLess(blue, 90)
+
+    def test_build_ranking_result_card_uses_shared_layout_and_global_rank(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            covers = []
+            for index in range(2):
+                cover_path = root / f"ranking-{index}.jpg"
+                Image.new("RGB", (120, 180), (40 + index * 80, 100, 180)).save(cover_path)
+                covers.append(cover_path)
+
+            query = RankingQuery(keyword="全彩", period="week", category="hanman", page=2)
+            result = RankingResult(
+                query,
+                2,
+                3,
+                12,
+                (
+                    SearchItem("111111", "Rank One", ("tag-a",)),
+                    SearchItem("222222", "Rank Two", ()),
+                ),
+            )
+            output = root / "ranking.png"
+
+            built = build_ranking_result_card(
+                result,
+                covers,
+                output,
+                title="韩漫 · 周榜 · 关键词：全彩",
+                command_prefix="/jm",
+            )
+
+            self.assertEqual(built, output)
+            with Image.open(output) as image:
+                self.assertEqual(image.format, "PNG")
+                self.assertGreaterEqual(image.width, 900)
+                self.assertGreaterEqual(image.height, 420)
 
 
 if __name__ == "__main__":
