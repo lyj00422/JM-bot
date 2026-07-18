@@ -1,12 +1,13 @@
 import unittest
 from types import SimpleNamespace
 
-from jmbot.core.catalog_service import get_album_detail, search_albums
+from jmbot.core.catalog_service import RankingQuery, get_album_detail, get_ranking_page, search_albums
 
 
 class FakeClient:
     def __init__(self):
         self.detail_calls = []
+        self.ranking_calls = []
 
     def get_album_detail(self, album_id):
         self.detail_calls.append(album_id)
@@ -23,7 +24,10 @@ class FakeClient:
             update_date="2026-06-25",
         )
 
-    def search_site(self, keyword, page=1):
+    def search_site(self, keyword, page=1, **kwargs):
+        if kwargs:
+            self.ranking_calls.append(("search", keyword, page, kwargs))
+            return self._ranking_page(page, "搜索排行")
         self.search_call = ("site", keyword, page)
         return SimpleNamespace(
             content=[
@@ -34,6 +38,10 @@ class FakeClient:
             page_count=3,
         )
 
+    def categories_filter(self, *, page, time, category, order_by):
+        self.ranking_calls.append(("category", page, time, category, order_by))
+        return self._ranking_page(page, "排行")
+
     def search_author(self, keyword, page=1):
         self.search_call = ("author", keyword, page)
         return SimpleNamespace(
@@ -42,6 +50,18 @@ class FakeClient:
             ],
             total=1,
             page_count=1,
+        )
+
+    @staticmethod
+    def _ranking_page(page, title_prefix):
+        start = (page - 1) * 4 + 1
+        return SimpleNamespace(
+            content=[
+                (f"{index:06d}", {"name": f"{title_prefix} {index}", "tags": ["热门"]})
+                for index in range(start, start + 4)
+            ],
+            total=12,
+            page_size=4,
         )
 
 
@@ -120,6 +140,58 @@ class CatalogServiceTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             search_albums("测试", kind="tag", client=FakeClient())
+
+    def test_ranking_selects_category_endpoint_and_repages_to_five_items(self):
+        client = FakeClient()
+
+        result = get_ranking_page(
+            RankingQuery(period="week", category="hanman", page=2),
+            client=client,
+        )
+
+        self.assertEqual([item.album_id for item in result.items], [
+            "000006", "000007", "000008", "000009", "000010",
+        ])
+        self.assertEqual((result.page, result.page_count, result.total), (2, 3, 12))
+        self.assertEqual(client.ranking_calls, [
+            ("category", 1, "w", "hanman", "mv"),
+            ("category", 2, "w", "hanman", "mv"),
+            ("category", 3, "w", "hanman", "mv"),
+        ])
+
+    def test_keyword_ranking_uses_ranked_site_search(self):
+        client = FakeClient()
+
+        result = get_ranking_page(
+            RankingQuery(keyword="全彩", period="month", category="doujin"),
+            client=client,
+        )
+
+        self.assertEqual(len(result.items), 5)
+        self.assertEqual(client.ranking_calls[0], (
+            "search",
+            "全彩",
+            1,
+            {"order_by": "mv", "time": "m", "category": "doujin"},
+        ))
+
+    def test_ranking_out_of_range_does_not_fetch_nonexistent_source_pages(self):
+        client = FakeClient()
+
+        result = get_ranking_page(RankingQuery(page=4), client=client)
+
+        self.assertEqual(result.items, ())
+        self.assertEqual(result.page_count, 3)
+        self.assertEqual(client.ranking_calls, [("category", 1, "a", "0", "mv")])
+
+    def test_ranking_rejects_invalid_domain_values(self):
+        for query in [
+            RankingQuery(period="year"),
+            RankingQuery(category="bad"),
+            RankingQuery(page=0),
+        ]:
+            with self.subTest(query=query), self.assertRaises(ValueError):
+                get_ranking_page(query, client=FakeClient())
 
 
 if __name__ == "__main__":
