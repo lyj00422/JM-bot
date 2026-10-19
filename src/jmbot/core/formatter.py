@@ -62,6 +62,13 @@ def format_help(
             f"{prefix} 历史 5",
             f"{prefix} 历史 失败 5",
         ],
+        "聊天": [
+            "聊天：",
+            "/ds 你的 API Key",
+            "/ds 状态",
+            "/ds 清除",
+            "/聊天 清空",
+        ],
     }
     if topic is not None:
         return "\n".join(topics[topic]) if topic in topics else "可用帮助主题：查找｜排行｜下载｜收藏｜任务"
@@ -91,6 +98,7 @@ def format_admin_help(admin_command_prefix: str = "/jmg") -> str:
             f"{prefix} 失败 最近 5",
             f"{prefix} 失败 21",
             f"{prefix} 失败 删除 21",
+            f"{prefix} 群聊key 群号 API_KEY；查看|清除",
         ]
     )
 

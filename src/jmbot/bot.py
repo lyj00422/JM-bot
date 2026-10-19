@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import shutil
 import tempfile
 from pathlib import Path
@@ -11,6 +12,16 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, Pr
 from nonebot.rule import Rule
 
 from jmbot.core.catalog_service import RankingQuery
+from jmbot.core.chat_service import (
+    CHAT_ADMIN_ID,
+    ChatAPIError,
+    ChatStore,
+    build_group_messages,
+    build_private_messages,
+    load_chat_role,
+    parse_group_decision,
+    request_chat_completion,
+)
 from jmbot.config import load_config
 from jmbot.core.command_service import (
     QueueTarget,
@@ -81,6 +92,10 @@ DOWNLOAD_SETTINGS = DownloadSettings(
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 USER_STORE = UserDataStore(CONFIG.user_db_path)
+CHAT_STORE = ChatStore(CONFIG.chat_db_path)
+CHAT_ROLE = load_chat_role(CONFIG.chat_role_path)
+_private_chat_locks: dict[int, asyncio.Lock] = {}
+_group_chat_locks: dict[int, asyncio.Lock] = {}
 DETAIL_CACHE = DetailCache(
     ttl_seconds=CONFIG.detail_cache_ttl_seconds,
     max_entries=CONFIG.query_cache_max_entries,
@@ -121,6 +136,32 @@ async def _is_jm_command(event: MessageEvent) -> bool:
 
 
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
+
+
+async def _is_chat_message(event: MessageEvent) -> bool:
+    if not isinstance(event, (GroupMessageEvent, PrivateMessageEvent)):
+        return False
+    if isinstance(event, PrivateMessageEvent) and not is_friend_private_message(event):
+        return False
+    plaintext = event.get_plaintext()
+    if parse_jm_message(plaintext, CONFIG.command_prefix, default_format=CONFIG.default_format):
+        return False
+    if parse_jm_admin_message(plaintext, CONFIG.admin_command_prefix):
+        return False
+    return _message_content(event).strip() != ""
+
+
+chat_matcher = on_message(rule=Rule(_is_chat_message), priority=20, block=True)
+
+
+@chat_matcher.handle()
+async def handle_chat_message(bot: Bot, event: MessageEvent) -> None:
+    if isinstance(event, GroupMessageEvent):
+        if CONFIG.allowed_group_ids and event.group_id not in CONFIG.allowed_group_ids:
+            return
+        await _handle_group_chat(bot, event)
+    elif isinstance(event, PrivateMessageEvent) and is_friend_private_message(event):
+        await _handle_private_chat(bot, event)
 
 
 @jm_matcher.handle()
@@ -171,6 +212,71 @@ async def _handle_parsed_command(
     command: JmMessage,
     target: QueueTarget,
 ) -> bool:
+    if command.action == "chat_private_key":
+        if not isinstance(event, PrivateMessageEvent):
+            await jm_matcher.send("请私聊机器人设置你的 API Key。")
+            return False
+        if not command.text:
+            await jm_matcher.send("用法：/ds 你的 API Key；查看：/ds 状态；清除：/ds 清除")
+            return False
+        try:
+            CHAT_STORE.set_private_key(event.user_id, command.text)
+        except ValueError:
+            await jm_matcher.send("API Key 不能为空。")
+            return False
+        await jm_matcher.send("你的 DeepSeek API Key 已保存。")
+        return False
+
+    if command.action == "chat_private_status":
+        if not isinstance(event, PrivateMessageEvent):
+            await jm_matcher.send("请私聊机器人查看你的聊天 Key。")
+            return False
+        configured = CHAT_STORE.get_private_key(event.user_id) is not None
+        await jm_matcher.send(f"你的私聊 API Key：{'已配置' if configured else '未配置'}")
+        return False
+
+    if command.action in {"chat_private_clear", "chat_clear"}:
+        if not isinstance(event, PrivateMessageEvent):
+            await jm_matcher.send("请私聊机器人管理你的聊天记录。")
+            return False
+        if command.action == "chat_private_clear":
+            removed = CHAT_STORE.remove_private_key(event.user_id)
+            await jm_matcher.send("已清除你的 API Key。" if removed else "你还没有保存 API Key。")
+        else:
+            CHAT_STORE.clear_private_history(event.user_id)
+            await jm_matcher.send("已清空你的私聊历史。")
+        return False
+
+    if command.action in {"chat_group_key_set", "chat_group_key_status", "chat_group_key_clear", "chat_status"}:
+        if int(event.user_id) != CHAT_ADMIN_ID:
+            await jm_matcher.send("你没有聊天管理权限。")
+            return False
+        if command.action != "chat_status" and not isinstance(event, PrivateMessageEvent):
+            await jm_matcher.send("请私聊机器人配置群聊 API Key。")
+            return False
+        if command.action == "chat_status":
+            await jm_matcher.send("聊天功能已启用；管理员 QQ：3065532050；模型：" + CONFIG.chat_model)
+            return False
+        if command.group_id is None:
+            return False
+        if command.action == "chat_group_key_set":
+            if not command.text:
+                await jm_matcher.send(f"用法：{CONFIG.admin_command_prefix} 群聊key 群号 API_KEY")
+                return False
+            CHAT_STORE.set_group_key(command.group_id, command.text)
+            await jm_matcher.send(f"群 {command.group_id} 的聊天 Key 已保存，余额不足状态已清除。")
+        elif command.action == "chat_group_key_status":
+            key = CHAT_STORE.get_group_key(command.group_id)
+            exhausted = CHAT_STORE.is_group_balance_exhausted(command.group_id)
+            await jm_matcher.send(
+                f"群 {command.group_id}：Key{'已配置' if key else '未配置'}；"
+                f"余额状态：{'余额不足' if exhausted else '正常'}"
+            )
+        else:
+            removed = CHAT_STORE.remove_group_key(command.group_id)
+            await jm_matcher.send(f"群 {command.group_id} 的聊天 Key 已{'清除' if removed else '不存在'}。")
+        return False
+
     if command.action == "request":
         if command.album_id is None:
             return False
@@ -425,6 +531,208 @@ async def _handle_parsed_command(
         return False
 
     return False
+
+
+async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
+    user_id = int(event.user_id)
+    api_key = CHAT_STORE.get_private_key(user_id)
+    if not api_key:
+        await chat_matcher.send("私聊需要先配置你的 DeepSeek API Key。\n发送：/ds 你的 API Key")
+        return
+
+    text = _message_content(event).strip()
+    lock = _lock_for(_private_chat_locks, user_id)
+    async with lock:
+        messages = build_private_messages(
+            CHAT_ROLE,
+            CHAT_STORE.get_private_summary(user_id),
+            CHAT_STORE.private_history(user_id, limit=30),
+            text,
+        )
+        CHAT_STORE.append_private_message(user_id, "user", text)
+        try:
+            reply = await asyncio.to_thread(
+                request_chat_completion,
+                api_key,
+                messages,
+                endpoint=CONFIG.chat_endpoint,
+                model=CONFIG.chat_model,
+                timeout_seconds=CONFIG.chat_timeout_seconds,
+            )
+        except ChatAPIError as error:
+            await chat_matcher.send(_private_error_message(error))
+            return
+
+        CHAT_STORE.append_private_message(user_id, "assistant", reply)
+        await chat_matcher.send(reply)
+
+        if CHAT_STORE.private_message_count(user_id) > 60:
+            await _compact_private_history(user_id, api_key)
+
+
+async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
+    group_id = int(event.group_id)
+    text = _message_content(event).strip()
+    sender_name = _sender_name(event)
+    mentioned = _mentions_bot(event, bot)
+    history = CHAT_STORE.group_history(group_id, limit=CONFIG.group_chat_history_limit)
+    CHAT_STORE.append_group_message(group_id, sender_name, text)
+
+    if CHAT_STORE.is_group_balance_exhausted(group_id):
+        if mentioned:
+            await chat_matcher.send("大肥鱼被饿死了")
+        return
+
+    api_key = CHAT_STORE.get_group_key(group_id)
+    if not api_key:
+        if mentioned:
+            await chat_matcher.send("这个群还没有配置聊天 API Key。")
+        return
+
+    active = CHAT_STORE.is_group_active(group_id)
+    candidate = mentioned or active or _looks_like_group_candidate(text, CHAT_ROLE.name)
+    if not candidate:
+        return
+
+    lock = _lock_for(_group_chat_locks, group_id)
+    async with lock:
+        messages = build_group_messages(
+            CHAT_ROLE,
+            history,
+            sender_name,
+            text,
+        )
+        try:
+            raw_reply = await asyncio.to_thread(
+                request_chat_completion,
+                api_key,
+                messages,
+                endpoint=CONFIG.chat_endpoint,
+                model=CONFIG.chat_model,
+                timeout_seconds=CONFIG.chat_timeout_seconds,
+                json_output=not mentioned,
+            )
+        except ChatAPIError as error:
+            if error.status_code == 402:
+                CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
+                if mentioned:
+                    await chat_matcher.send("大肥鱼被饿死了")
+            elif mentioned:
+                await chat_matcher.send(_group_error_message(error))
+            return
+
+        if mentioned:
+            reply = raw_reply
+        else:
+            should_reply, reply = parse_group_decision(raw_reply)
+            if not should_reply:
+                return
+        CHAT_STORE.append_group_message(group_id, CHAT_ROLE.name, reply)
+        CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
+        await chat_matcher.send(reply)
+
+
+async def _compact_private_history(user_id: int, api_key: str) -> None:
+    history = CHAT_STORE.private_history(user_id, limit=60)
+    if len(history) <= 30:
+        return
+    old_messages = history[:-20]
+    previous = CHAT_STORE.get_private_summary(user_id) or "无"
+    transcript = "\n".join(f"{item.role}: {item.content}" for item in old_messages)
+    prompt = (
+        "请把下面的私聊内容压缩成一份简洁、准确、可长期使用的中文记忆摘要。"
+        "保留用户偏好、重要经历、关系变化、称呼和未完成事项，不要编造。"
+        f"\n已有摘要：{previous}\n新增对话：\n{transcript}"
+    )
+    try:
+        summary = await asyncio.to_thread(
+            request_chat_completion,
+            api_key,
+            [
+                {"role": "system", "content": "你负责整理聊天记忆摘要，只输出摘要正文。"},
+                {"role": "user", "content": prompt},
+            ],
+            endpoint=CONFIG.chat_endpoint,
+            model=CONFIG.chat_model,
+            timeout_seconds=CONFIG.chat_timeout_seconds,
+        )
+    except ChatAPIError:
+        return
+    CHAT_STORE.set_private_summary(user_id, summary)
+    CHAT_STORE.trim_private_history(user_id, keep=20)
+
+
+def _private_error_message(error: ChatAPIError) -> str:
+    if error.status_code == 402:
+        return "你的 DeepSeek API Key 余额不足，请充值后再试。"
+    if error.status_code == 401:
+        return "你的 DeepSeek API Key 无效，请重新配置。"
+    if error.status_code == 429:
+        return "聊天请求太频繁了，请稍后再试。"
+    return "聊天服务暂时不可用，请稍后再试。"
+
+
+def _group_error_message(error: ChatAPIError) -> str:
+    if error.status_code == 401:
+        return "大肥鱼的群聊钥匙失效了，请联系管理员。"
+    if error.status_code == 429:
+        return "大肥鱼现在有点忙，晚点再叫我。"
+    return "大肥鱼暂时没听清，稍后再试。"
+
+
+def _lock_for(locks: dict[int, asyncio.Lock], owner_id: int) -> asyncio.Lock:
+    lock = locks.get(owner_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[owner_id] = lock
+    return lock
+
+
+def _message_content(event: MessageEvent) -> str:
+    parts: list[str] = []
+    for segment in event.get_message():
+        segment_type = getattr(segment, "type", "")
+        data = getattr(segment, "data", {}) or {}
+        if segment_type == "text":
+            parts.append(str(data.get("text", "")))
+        elif segment_type == "at":
+            parts.append(f"@{data.get('qq', '')}")
+        elif segment_type == "image":
+            parts.append("[图片]")
+        elif segment_type == "face":
+            parts.append("[表情]")
+        elif segment_type == "reply":
+            parts.append("[回复消息]")
+        elif segment_type in {"record", "video", "file"}:
+            parts.append(f"[{segment_type}]")
+    return "".join(parts) or event.get_plaintext()
+
+
+def _sender_name(event: GroupMessageEvent) -> str:
+    sender = getattr(event, "sender", None)
+    return str(
+        getattr(sender, "card", None)
+        or getattr(sender, "nickname", None)
+        or event.user_id
+    )
+
+
+def _mentions_bot(event: GroupMessageEvent, bot: Bot) -> bool:
+    bot_id = str(bot.self_id)
+    return any(
+        getattr(segment, "type", "") == "at"
+        and str((getattr(segment, "data", {}) or {}).get("qq")) == bot_id
+        for segment in event.get_message()
+    )
+
+
+def _looks_like_group_candidate(text: str, role_name: str) -> bool:
+    normalized = text.casefold()
+    if role_name.casefold() in normalized or "大肥鱼" in normalized:
+        return True
+    if any(mark in text for mark in ("？", "?")):
+        return True
+    return any(normalized.startswith(prefix) for prefix in ("你能", "能不能", "可以", "为什么", "怎么", "帮我"))
 
 
 def _target_from_event(event: MessageEvent) -> QueueTarget | None:

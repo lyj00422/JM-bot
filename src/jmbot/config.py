@@ -43,6 +43,13 @@ class BotConfig:
     group_folder_name: str
     history_retention_days: int
     history_max_per_user: int
+    chat_db_path: Path
+    chat_role_path: Path
+    chat_endpoint: str
+    chat_model: str
+    chat_timeout_seconds: int
+    group_chat_history_limit: int
+    group_chat_active_seconds: int
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -138,4 +145,11 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         group_folder_name=source.get("JM_BOT_GROUP_FOLDER", "JM"),
         history_retention_days=parse_positive_int(source, "JM_BOT_HISTORY_RETENTION_DAYS", 7),
         history_max_per_user=parse_positive_int(source, "JM_BOT_HISTORY_MAX_PER_USER", 50),
+        chat_db_path=Path(source.get("JM_BOT_CHAT_DB", "data/chat.sqlite3")),
+        chat_role_path=Path(source.get("JM_BOT_CHAT_ROLE", "data/chat_role.json")),
+        chat_endpoint=source.get("JM_BOT_CHAT_ENDPOINT", "https://api.deepseek.com/chat/completions"),
+        chat_model=source.get("JM_BOT_CHAT_MODEL", "deepseek-flash"),
+        chat_timeout_seconds=parse_positive_int(source, "JM_BOT_CHAT_TIMEOUT_SECONDS", 60),
+        group_chat_history_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_HISTORY_LIMIT", 30),
+        group_chat_active_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_ACTIVE_SECONDS", 600),
     )

@@ -36,6 +36,14 @@ JmAction = Literal[
     "admin_jump",
     "admin_failed",
     "admin_failed_delete",
+    "chat_private_key",
+    "chat_private_status",
+    "chat_private_clear",
+    "chat_clear",
+    "chat_group_key_set",
+    "chat_group_key_status",
+    "chat_group_key_clear",
+    "chat_status",
 ]
 
 
@@ -58,6 +66,8 @@ class JmMessage:
     ranking_period: str = "all"
     ranking_category: str = "all"
     help_topic: str | None = None
+    text: str | None = None
+    group_id: int | None = None
 
 
 _RANKING_PERIOD_ALIASES = {
@@ -202,6 +212,20 @@ def parse_jm_message(
         topic = help_match.group(1)
         return JmMessage(action="help", help_topic=topic.strip() if topic else None)
 
+    api_key_match = re.match(r"^\s*/ds(?:key)?(?:\s+(.+?))?\s*$", message, re.IGNORECASE)
+    if api_key_match is not None:
+        value = (api_key_match.group(1) or "").strip()
+        if value.casefold() in {"状态", "status"}:
+            return JmMessage(action="chat_private_status")
+        if value.casefold() in {"清除", "删除", "clear", "remove"}:
+            return JmMessage(action="chat_private_clear")
+        if value:
+            return JmMessage(action="chat_private_key", text=value)
+        return JmMessage(action="chat_private_key")
+
+    if re.match(r"^\s*/聊天\s+(?:清空|重置|clear)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="chat_clear")
+
     if re.match(rf"^\s*{prefix}\s+(我的|my)\s*$", message, re.IGNORECASE):
         return JmMessage(action="my_tasks")
 
@@ -259,6 +283,23 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
 
     if re.match(rf"^\s*{prefix}\s+失败\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_failed")
+
+    group_key_match = re.match(
+        rf"^\s*{prefix}\s+群聊key\s+([0-9]+)\s+(.+?)\s*$",
+        message,
+        re.IGNORECASE,
+    )
+    if group_key_match is not None:
+        group_id = int(group_key_match.group(1))
+        value = group_key_match.group(2).strip()
+        if value.casefold() in {"查看", "状态", "status"}:
+            return JmMessage(action="chat_group_key_status", group_id=group_id)
+        if value.casefold() in {"清除", "删除", "clear", "remove"}:
+            return JmMessage(action="chat_group_key_clear", group_id=group_id)
+        return JmMessage(action="chat_group_key_set", group_id=group_id, text=value)
+
+    if re.match(rf"^\s*{prefix}\s+聊天状态\s*$", message, re.IGNORECASE):
+        return JmMessage(action="chat_status")
 
     return None
 

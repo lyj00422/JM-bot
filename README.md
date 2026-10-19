@@ -196,6 +196,8 @@ JM_BOT_OUTPUT_ROOT=data/output
 JM_BOT_OPTION_ROOT=data/options
 JM_BOT_QUEUE_DB=data/queue.sqlite3
 JM_BOT_USER_DB=data/user.sqlite3
+JM_BOT_CHAT_DB=data/chat.sqlite3
+JM_BOT_CHAT_ROLE=data/chat_role.json
 JM_BOT_CLEAN_AFTER_UPLOAD=true
 JM_BOT_GROUP_FOLDER=JM
 ```
@@ -222,9 +224,16 @@ JM_BOT_ALLOWED_FORMATS=pdf,zip
 JM_BOT_PROGRESS_MODE=precise
 JM_BOT_HISTORY_RETENTION_DAYS=7
 JM_BOT_HISTORY_MAX_PER_USER=50
+JM_BOT_CHAT_ENDPOINT=https://api.deepseek.com/chat/completions
+JM_BOT_CHAT_MODEL=deepseek-flash
+JM_BOT_CHAT_TIMEOUT_SECONDS=60
+JM_BOT_GROUP_CHAT_HISTORY_LIMIT=30
+JM_BOT_GROUP_CHAT_ACTIVE_SECONDS=600
 ```
 
 `JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_USER_DB` 保存用户收藏记录。`JM_BOT_HISTORY_RETENTION_DAYS` 控制已完成、失败、取消任务的保留天数，默认 7 天；`JM_BOT_HISTORY_MAX_PER_USER` 控制每个用户最多保留多少条历史记录，默认 50 条。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
+
+聊天功能与下载功能并行，不需要切换模式。私聊用户先发送 `/ds 你的 API Key`，然后直接发送普通文字；`/ds 状态` 查看配置，`/ds 清除` 删除 Key，`/聊天 清空` 清除私聊历史。管理员 QQ `3065532050` 通过私聊配置群聊 Key：`/jmg 群聊key 群号 API_KEY`，也可以使用 `查看` 和 `清除`。群聊被机器人 @ 时一定回复，普通消息由 Bot 自主判断是否加入；Bot 回复后默认进入 10 分钟活跃窗口。当前模型配置为 `deepseek-flash`，并关闭 thinking。
 
 ## 服务器部署
 
