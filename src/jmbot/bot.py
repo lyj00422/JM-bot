@@ -139,6 +139,8 @@ jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
 
 
 async def _is_chat_message(event: MessageEvent) -> bool:
+    if not CHAT_STORE.is_chat_enabled():
+        return False
     if not isinstance(event, (GroupMessageEvent, PrivateMessageEvent)):
         return False
     if isinstance(event, PrivateMessageEvent) and not is_friend_private_message(event):
@@ -247,7 +249,14 @@ async def _handle_parsed_command(
             await jm_matcher.send("已清空你的私聊历史。")
         return False
 
-    if command.action in {"chat_group_key_set", "chat_group_key_status", "chat_group_key_clear", "chat_status"}:
+    if command.action in {
+        "chat_group_key_set",
+        "chat_group_key_status",
+        "chat_group_key_clear",
+        "chat_status",
+        "chat_enable",
+        "chat_disable",
+    }:
         if int(event.user_id) != CHAT_ADMIN_ID:
             await jm_matcher.send("你没有聊天管理权限。")
             return False
@@ -255,7 +264,16 @@ async def _handle_parsed_command(
             await jm_matcher.send("请私聊机器人配置群聊 API Key。")
             return False
         if command.action == "chat_status":
-            await jm_matcher.send("聊天功能已启用；管理员 QQ：3065532050；模型：" + CONFIG.chat_model)
+            state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
+            await jm_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
+            return False
+        if command.action == "chat_enable":
+            CHAT_STORE.set_chat_enabled(True)
+            await jm_matcher.send("聊天功能已开启，下载功能一直可用。")
+            return False
+        if command.action == "chat_disable":
+            CHAT_STORE.set_chat_enabled(False)
+            await jm_matcher.send("聊天功能已停止，当前只保留下载功能。")
             return False
         if command.group_id is None:
             return False

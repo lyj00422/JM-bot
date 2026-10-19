@@ -44,6 +44,8 @@ JmAction = Literal[
     "chat_group_key_status",
     "chat_group_key_clear",
     "chat_status",
+    "chat_enable",
+    "chat_disable",
 ]
 
 
@@ -300,6 +302,12 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
 
     if re.match(rf"^\s*{prefix}\s+聊天状态\s*$", message, re.IGNORECASE):
         return JmMessage(action="chat_status")
+
+    if re.match(rf"^\s*{prefix}\s+聊天(?:开启|打开|enable)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="chat_enable")
+
+    if re.match(rf"^\s*{prefix}\s+聊天(?:停止|关闭|disable)\s*$", message, re.IGNORECASE):
+        return JmMessage(action="chat_disable")
 
     return None
 

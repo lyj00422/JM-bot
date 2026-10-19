@@ -48,6 +48,15 @@ class ChatServiceTest(unittest.TestCase):
             store.set_group_key(10001, "new-key")
             self.assertFalse(store.is_group_balance_exhausted(10001))
 
+    def test_chat_enabled_defaults_on_and_persists_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ChatStore(Path(tmp) / "chat.sqlite3")
+            self.assertTrue(store.is_chat_enabled())
+            store.set_chat_enabled(False)
+            self.assertFalse(store.is_chat_enabled())
+            reopened = ChatStore(Path(tmp) / "chat.sqlite3")
+            self.assertFalse(reopened.is_chat_enabled())
+
     def test_private_and_group_messages_include_role_and_context(self):
         role = ChatRole("大肥鱼喵", "保持简短")
         private = build_private_messages(

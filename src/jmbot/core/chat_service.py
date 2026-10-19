@@ -51,6 +51,21 @@ class ChatStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
+    def is_chat_enabled(self) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM chat_settings WHERE key = 'enabled'"
+            ).fetchone()
+        return not row or str(row[0]) != "0"
+
+    def set_chat_enabled(self, enabled: bool) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES ('enabled', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("1" if enabled else "0",),
+            )
+
     def set_private_key(self, user_id: int, api_key: str) -> None:
         self._set_key("private_api_keys", "user_id", user_id, api_key)
 
@@ -240,6 +255,9 @@ class ChatStore:
                 """
                 CREATE TABLE IF NOT EXISTS private_api_keys (
                     user_id INTEGER PRIMARY KEY, api_key TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS chat_settings (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS group_api_keys (
                     group_id INTEGER PRIMARY KEY, api_key TEXT NOT NULL, updated_at TEXT NOT NULL

@@ -19,6 +19,11 @@ class ChatParserTest(unittest.TestCase):
         self.assertEqual((status_command.action, status_command.group_id), ("chat_group_key_status", 123456))
         self.assertEqual((clear_command.action, clear_command.group_id), ("chat_group_key_clear", 123456))
 
+    def test_admin_chat_switch_commands(self):
+        self.assertEqual(parse_jm_admin_message("/jmg 聊天停止").action, "chat_disable")
+        self.assertEqual(parse_jm_admin_message("/jmg 聊天开启").action, "chat_enable")
+        self.assertEqual(parse_jm_admin_message("/jmg 聊天状态").action, "chat_status")
+
 
 if __name__ == "__main__":
     unittest.main()

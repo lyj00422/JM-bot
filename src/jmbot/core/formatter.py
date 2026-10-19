@@ -98,7 +98,7 @@ def format_admin_help(admin_command_prefix: str = "/jmg") -> str:
             f"{prefix} 失败 最近 5",
             f"{prefix} 失败 21",
             f"{prefix} 失败 删除 21",
-            f"{prefix} 群聊key 群号 API_KEY；查看|清除",
+            f"{prefix} 群聊key 群号 API_KEY；查看|清除；聊天停止|开启|状态",
         ]
     )
 
