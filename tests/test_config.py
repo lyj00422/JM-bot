@@ -102,6 +102,8 @@ class ConfigTest(unittest.TestCase):
 
     def test_load_config_enables_general_defaults(self):
         config = load_config({})
+        self.assertEqual(config.group_chat_observe_min_seconds, 7200)
+        self.assertEqual(config.group_chat_observe_max_seconds, 7200)
 
         self.assertTrue(config.auto_split_pdf)
         self.assertEqual(config.split_image_count, 80)

@@ -122,8 +122,8 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
     if progress_mode not in {"stage", "precise"}:
         raise ValueError("JM_BOT_PROGRESS_MODE must be stage or precise")
 
-    observe_min = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS", 120)
-    observe_max = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS", 300)
+    observe_min = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS", 7200)
+    observe_max = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS", 7200)
     if observe_max < observe_min:
         raise ValueError("JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS must be >= MIN_SECONDS")
 

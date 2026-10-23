@@ -233,8 +233,8 @@ JM_BOT_GROUP_CHAT_CONTEXT_SECONDS=600
 JM_BOT_GROUP_CHAT_ACTIVE_SECONDS=180
 JM_BOT_GROUP_CHAT_FOLLOWUP_COOLDOWN_SECONDS=3
 JM_BOT_GROUP_CHAT_OBSERVE_ENABLED=true
-JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS=120
-JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS=300
+JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS=7200
+JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS=7200
 JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS=45
 JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT=3
 JM_BOT_CHAT_REPLY_MAX_LENGTH=500
@@ -249,7 +249,7 @@ JM_BOT_CHAT_ALIASES=大肥鱼,大肥鱼喵,吃白饭大肥鱼,JM大使
 
 群聊上下文由 `JM_BOT_GROUP_CHAT_HISTORY_LIMIT` 和 `JM_BOT_GROUP_CHAT_CONTEXT_SECONDS` 限制，默认最多 12 条且只取最近 600 秒。真实 @、引用机器人或提及机器人名字会唤醒并引用触发消息回复；成功互动后进入默认 180 秒的接话窗口，由模型判断新消息是否在接话或值得参与，后续不再自动引用。接话默认间隔至少 3 秒，合并期间被新消息覆盖的候选；它不占随机主动互动的次数。成员之间互相 @ 或引用时，机器人没有被直接叫到就不会抢答。
 
-默认每隔随机 120–300 秒观察一次近期聊天，可选择简短发言、只回应消息表情、戳当前发言者或沉默。只检查本次连接已收到消息的群，只看最近 180 秒内的有限条记录，没有新消息就不重复判断；这是 OneBot 接收到的群消息，不是读取 QQ 客户端当前页面。观察遵守群白名单、聊天总开关、群 Key 与余额状态。`JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS` 和 `JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT` 只约束随机主动互动（默认间隔至少 45 秒、10 分钟最多 3 次）；@ 唤醒不受这些限额影响。
+默认每 2 小时（7200 秒）观察一次近期聊天，可选择简短发言、只回应消息表情、戳当前发言者或沉默。观察间隔的最小值和最大值默认均为 7200 秒，可配置为随机范围。只检查本次连接已收到消息的群，只看最近 180 秒内的有限条记录，没有新消息就不重复判断；这是 OneBot 接收到的群消息，不是读取 QQ 客户端当前页面。观察遵守群白名单、聊天总开关、群 Key 与余额状态。`JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS` 和 `JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT` 只约束随机主动互动（默认间隔至少 45 秒、10 分钟最多 3 次）；@ 唤醒不受这些限额影响。
 
 禁止黄脸表情、颜文字、Unicode emoji 和直接输出 CQ 码。超级表情保留 `[qq_face:编号]` 格式，仅开放 `src/jmbot/core/chat_service.py` 中 `SUPER_FACES` 的非黄脸白名单，例如 `[qq_face:364]`（汪汪超级赞）、`[qq_face:375]`（超级鼓掌）、`[qq_face:401]`（企鹅超级转圈），一次最多一个。消息底部表情回应与发送超级表情是不同能力：前者调用 NapCat `set_msg_emoji_like`，后者发送原生 `face` 消息段，由 NapCat 根据 ID 自动选择动画。底部回应的显示样式取决于 QQ 客户端，不能保证以超级动画展示。回应只允许指向当前上下文中的本群成员消息，成功后去重；戳人只针对当前发言者。扩展 API 不支持或失败时记录错误，不回退成黄脸。
 
