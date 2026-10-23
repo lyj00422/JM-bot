@@ -92,11 +92,11 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIn("禁止使用 Unicode emoji", DEFAULT_ROLE_PROMPT)
 
     def test_split_chat_reply_allows_whitelisted_qq_faces_and_removes_unicode_emoji(self):
-        chunks = split_chat_reply("好呀 [qq_face:14] 😊 [qq_face:999]", max_text_length=100)
+        chunks = split_chat_reply("好呀 [qq_face:364] 😊 [qq_face:14][qq_face:999]", max_text_length=100)
 
         self.assertEqual(
             chunks,
-            [[("text", "好呀 "), ("face", "14"), ("text", "  [qq_face:999]")]],
+            [[("text", "好呀 "), ("face", "364"), ("text", "  ")]],
         )
 
     def test_split_chat_reply_limits_text_length(self):
@@ -264,8 +264,9 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(extract_chat_reply("{坏掉的 json"), "{坏掉的 json")
 
     def test_face_marker_uses_whitelisted_token(self):
-        self.assertEqual(face_marker(14), "[qq_face:14]")
-        self.assertEqual(face_marker("21"), "[qq_face:21]")
+        self.assertEqual(face_marker(364), "[qq_face:364]")
+        self.assertEqual(face_marker("375"), "[qq_face:375]")
+        self.assertEqual(face_marker(14), "[表情]")
         self.assertEqual(face_marker(999), "[表情]")
         self.assertEqual(face_marker(""), "[表情]")
 

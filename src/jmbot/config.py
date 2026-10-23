@@ -57,6 +57,10 @@ class BotConfig:
     group_chat_proactive_limit: int
     chat_reply_max_length: int
     chat_aliases: tuple[str, ...]
+    group_chat_observe_enabled: bool
+    group_chat_observe_min_seconds: int
+    group_chat_observe_max_seconds: int
+    group_chat_followup_cooldown_seconds: int
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -118,6 +122,11 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
     if progress_mode not in {"stage", "precise"}:
         raise ValueError("JM_BOT_PROGRESS_MODE must be stage or precise")
 
+    observe_min = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS", 120)
+    observe_max = parse_positive_int(source, "JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS", 300)
+    if observe_max < observe_min:
+        raise ValueError("JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS must be >= MIN_SECONDS")
+
     return BotConfig(
         host=source.get("JM_BOT_HOST", "127.0.0.1"),
         port=int(source.get("JM_BOT_PORT", "8080")),
@@ -161,12 +170,18 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         chat_timeout_seconds=parse_positive_int(source, "JM_BOT_CHAT_TIMEOUT_SECONDS", 60),
         group_chat_history_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_HISTORY_LIMIT", 12),
         group_chat_context_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_CONTEXT_SECONDS", 600),
-        group_chat_active_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_ACTIVE_SECONDS", 600),
+        group_chat_active_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_ACTIVE_SECONDS", 180),
         group_chat_reply_cooldown_seconds=parse_positive_int(
             source, "JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS", 45
         ),
         group_chat_proactive_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT", 3),
         chat_reply_max_length=parse_positive_int(source, "JM_BOT_CHAT_REPLY_MAX_LENGTH", 500),
+        group_chat_observe_enabled=parse_bool(source.get("JM_BOT_GROUP_CHAT_OBSERVE_ENABLED"), True),
+        group_chat_observe_min_seconds=observe_min,
+        group_chat_observe_max_seconds=observe_max,
+        group_chat_followup_cooldown_seconds=parse_positive_int(
+            source, "JM_BOT_GROUP_CHAT_FOLLOWUP_COOLDOWN_SECONDS", 3
+        ),
         chat_aliases=tuple(
             alias.strip()
             for alias in source.get(

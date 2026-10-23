@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 import shutil
 import tempfile
@@ -16,12 +17,15 @@ from jmbot.core.chat_service import (
     CHAT_ADMIN_ID,
     ChatAPIError,
     ChatStore,
+    GroupAction,
+    SUPER_FACES,
+    StoredMessage,
     build_group_messages,
     build_private_messages,
     extract_chat_reply,
     face_marker,
     load_chat_role,
-    parse_group_response,
+    parse_group_action,
     request_chat_completion,
     split_chat_reply,
 )
@@ -109,6 +113,9 @@ _group_chat_locks: dict[int, asyncio.Lock] = {}
 _group_chat_last_reply: dict[int, float] = {}
 _group_chat_proactive_replies: dict[int, list[float]] = {}
 _group_alias_cache: dict[int, tuple[float, set[str]]] = {}
+_attention_tasks: dict[str, asyncio.Task] = {}
+_attention_groups: dict[str, set[int]] = {}
+_attention_examined: dict[tuple[str, int], int] = {}
 DETAIL_CACHE = DetailCache(
     ttl_seconds=CONFIG.detail_cache_ttl_seconds,
     max_entries=CONFIG.query_cache_max_entries,
@@ -133,6 +140,24 @@ DRIVER.register_adapter(OneBotV11Adapter)
 @DRIVER.on_bot_connect
 async def _start_queue_worker_on_connect(bot: Bot) -> None:
     await _ensure_queue_worker(bot)
+    _ensure_attention_worker(bot)
+
+
+@DRIVER.on_bot_disconnect
+async def _stop_attention_on_disconnect(bot: Bot) -> None:
+    task = _attention_tasks.pop(str(bot.self_id), None)
+    if task:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@DRIVER.on_shutdown
+async def _stop_attention_on_shutdown() -> None:
+    tasks = list(_attention_tasks.values())
+    _attention_tasks.clear()
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _is_jm_command(event: MessageEvent) -> bool:
@@ -638,6 +663,9 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
 
 async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
     group_id = int(event.group_id)
+    if str(event.user_id) == str(bot.self_id):
+        return
+    _attention_groups.setdefault(str(bot.self_id), set()).add(group_id)
     mentioned = is_at_bot(event, bot.self_id)
     text = _message_content(event).strip() or ("（只 @ 了你，没有说话）" if mentioned else "")
     sender_name = _sender_name(event)
@@ -649,12 +677,9 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
         mentioned,
         [getattr(segment, "type", "unknown") for segment in message_segments(event)],
     )
-    history = CHAT_STORE.group_history(
-        group_id,
-        limit=CONFIG.group_chat_history_limit,
-        max_age_seconds=CONFIG.group_chat_context_seconds,
+    current_message_id = CHAT_STORE.append_group_message(
+        group_id, sender_name, text, user_id=int(event.user_id), message_id=int(event.message_id),
     )
-    current_message_id = CHAT_STORE.append_group_message(group_id, sender_name, text)
 
     if CHAT_STORE.is_group_balance_exhausted(group_id):
         LOGGER.warning("群聊跳过：API 余额标记不足 group_id={} mentioned={}", group_id, mentioned)
@@ -670,8 +695,13 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
         return
 
     active = CHAT_STORE.is_group_active(group_id)
-    alias_match = _looks_like_group_candidate(text, CHAT_ROLE.name, await _group_aliases(bot, event))
+    aliases = await _group_aliases(bot, event)
+    alias_match = any(alias and alias in text.casefold() for alias in aliases)
     replied_to_bot = is_reply_to_bot(event, bot.self_id)
+    direct = mentioned or replied_to_bot or alias_match
+    # Do not interrupt member-to-member @ / quoted exchanges without explicit address.
+    if not direct and (at_targets(event) or getattr(event, "reply", None)):
+        return
     LOGGER.info(
         "群聊触发判断 group_id={} mentioned={} replied_to_bot={} alias_match={} active={}",
         group_id,
@@ -680,31 +710,43 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
         alias_match,
         active,
     )
-    if not mentioned and not replied_to_bot and not alias_match:
-        LOGGER.info("群聊跳过：未命中 @、回复或昵称触发 group_id={}", group_id)
-        return
-    # @ 或回复机器人时无条件回应；昵称/关键词命中的主动回应只受冷却与频率限制。
-    # 这里不能要求 active：活跃窗口只在回复成功后才写入，否则首次关键词触发
-    # 永远不可能发生（群聊沉默的死锁）。
-    if not mentioned and not replied_to_bot and not _group_reply_allowed(group_id):
-        LOGGER.info("群聊跳过：主动回复限流 group_id={} active={}", group_id, active)
+    if not direct and not active:
         return
 
     lock = _lock_for(_group_chat_locks, group_id)
     async with lock:
         if (
-            not mentioned
-            and not replied_to_bot
+            not CHAT_STORE.is_chat_enabled()
+            or CHAT_STORE.get_group_key(group_id) != api_key
+            or CHAT_STORE.is_group_balance_exhausted(group_id)
+        ):
+            return
+        if (
+            not direct
             and CHAT_STORE.latest_group_message_id(group_id) != current_message_id
         ):
             LOGGER.info("群聊跳过：被新消息覆盖的排队回复 group_id={} message_id={}", group_id, current_message_id)
             return
+        if not direct:
+            if not CHAT_STORE.is_group_active(group_id):
+                return
+            delay = CONFIG.group_chat_followup_cooldown_seconds - (time.time() - _group_chat_last_reply.get(group_id, 0))
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if CHAT_STORE.latest_group_message_id(group_id) != current_message_id:
+                return
+        history = CHAT_STORE.group_history(
+            group_id, limit=CONFIG.group_chat_history_limit, max_age_seconds=CONFIG.group_chat_context_seconds,
+            up_to_id=current_message_id,
+        )
+        # The trigger is already in history, including its platform metadata.
         messages = build_group_messages(
             CHAT_ROLE,
             history,
             sender_name,
-            text,
-            decision_required=not mentioned and not replied_to_bot,
+            f"请回应消息ID={int(event.message_id)}：{text[:1200]}",
+            decision_required=not direct,
+            attention_mode="direct" if direct else "continuation",
         )
         try:
             LOGGER.info(
@@ -731,7 +773,7 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 error.status_code,
                 type(error).__name__,
             )
-            if error.status_code == 402:
+            if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
                 CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
                 if mentioned:
                     await chat_matcher.send("大肥鱼被饿死了")
@@ -739,34 +781,20 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 await chat_matcher.send(_group_error_message(error))
             return
 
-        should_reply, reply, should_poke = parse_group_response(
-            raw_reply,
-            decision_required=not mentioned and not replied_to_bot,
-        )
-        if not should_reply:
-            LOGGER.info("群聊模型决定不回复 group_id={}", group_id)
+        if not CHAT_STORE.is_chat_enabled() or CHAT_STORE.get_group_key(group_id) != api_key:
             return
-        CHAT_STORE.append_group_message(group_id, CHAT_ROLE.name, reply)
-        CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
-        if not mentioned:
-            _record_group_proactive_reply(group_id)
-        _group_chat_last_reply[group_id] = time.time()
-        try:
-            if should_poke:
-                try:
-                    await bot.call_api("group_poke", group_id=group_id, user_id=int(event.user_id))
-                except Exception as error:
-                    LOGGER.warning(
-                        "群聊戳一戳发送失败 group_id={} user_id={} error_type={}",
-                        group_id,
-                        event.user_id,
-                        type(error).__name__,
-                    )
-            await _send_chat_reply(chat_matcher, reply, reply_message_id=int(event.message_id))
-        except Exception:
-            LOGGER.exception("群聊回复发送失败 group_id={}", group_id)
-            raise
-        LOGGER.info("群聊回复发送成功 group_id={} trigger={}", group_id, "at" if mentioned else "passive")
+        if not direct and CHAT_STORE.latest_group_message_id(group_id) != current_message_id:
+            return
+        _attention_examined[(str(bot.self_id), group_id)] = current_message_id
+        delivered = await _deliver_group_action(
+            bot, group_id, parse_group_action(raw_reply, direct=direct), history,
+            current_user_id=int(event.user_id),
+            reply_message_id=int(event.message_id) if direct else None,
+        )
+        LOGGER.info(
+            "群聊互动完成 group_id={} trigger={} delivered={}",
+            group_id, "direct" if direct else "continuation", delivered,
+        )
 
 
 async def _compact_private_history(user_id: int, api_key: str) -> None:
@@ -892,34 +920,152 @@ def _record_group_proactive_reply(group_id: int) -> None:
     _group_chat_proactive_replies.setdefault(group_id, []).append(time.time())
 
 
-def _looks_like_group_candidate(text: str, role_name: str, aliases: set[str] | None = None) -> bool:
-    normalized = text.casefold()
-    names = aliases or {role_name.casefold(), "大肥鱼"}
-    if any(name and name in normalized for name in names):
-        return True
-    if any(mark in text for mark in ("？", "?")):
-        return True
-    return any(normalized.startswith(prefix) for prefix in ("你能", "能不能", "可以", "为什么", "怎么", "帮我"))
+def _ensure_attention_worker(bot: Bot) -> None:
+    if not CONFIG.group_chat_observe_enabled:
+        return
+    bot_id = str(bot.self_id)
+    task = _attention_tasks.get(bot_id)
+    if task is None or task.done():
+        _attention_tasks[bot_id] = asyncio.create_task(_attention_loop(bot))
+
+
+async def _attention_loop(bot: Bot) -> None:
+    while True:
+        await asyncio.sleep(random.uniform(
+            CONFIG.group_chat_observe_min_seconds, CONFIG.group_chat_observe_max_seconds,
+        ))
+        for group_id in tuple(_attention_groups.get(str(bot.self_id), ())):
+            try:
+                await _observe_group(bot, group_id)
+            except Exception:
+                LOGGER.exception("群聊随机观察失败 group_id={}", group_id)
+
+
+async def _observe_group(bot: Bot, group_id: int) -> None:
+    if not CONFIG.group_chat_observe_enabled or not CHAT_STORE.is_chat_enabled():
+        return
+    if CONFIG.allowed_group_ids and group_id not in CONFIG.allowed_group_ids:
+        return
+    lock = _lock_for(_group_chat_locks, group_id)
+    if lock.locked():
+        return
+    async with lock:
+        if CHAT_STORE.is_group_balance_exhausted(group_id) or not _group_reply_allowed(group_id):
+            return
+        api_key = CHAT_STORE.get_group_key(group_id)
+        if not api_key:
+            return
+        cursor = CHAT_STORE.latest_group_message_id(group_id)
+        key = (str(bot.self_id), group_id)
+        if cursor is None or cursor <= _attention_examined.get(key, 0):
+            return
+        history = CHAT_STORE.group_history(
+            group_id, limit=CONFIG.group_chat_history_limit,
+            max_age_seconds=min(CONFIG.group_chat_context_seconds, 180),
+        )
+        _attention_examined[key] = cursor
+        users = [item for item in history if item.role == "user" and item.user_id != int(bot.self_id)]
+        if not users:
+            return
+        current = users[-1]
+        messages = build_group_messages(
+            CHAT_ROLE, history, "观察提示", "判断是否参与上面最新话题或进行互动；没有必要就保持沉默。",
+            attention_mode="observe",
+        )
+    # A background model request must not hold up explicit mentions. Validate
+    # its snapshot again under the group lock before performing any actions.
+    try:
+        raw = await asyncio.to_thread(
+            request_chat_completion, api_key, messages, endpoint=CONFIG.chat_endpoint,
+            model=CONFIG.chat_model, timeout_seconds=CONFIG.chat_timeout_seconds,
+            proxy=CONFIG.chat_proxy, json_output=True,
+        )
+    except ChatAPIError as error:
+        if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
+            CHAT_STORE.mark_group_balance_exhausted(group_id)
+        LOGGER.warning("群聊观察请求失败 group_id={} status_code={}", group_id, error.status_code)
+        return
+    async with lock:
+        if (
+            not CHAT_STORE.is_chat_enabled()
+            or CHAT_STORE.get_group_key(group_id) != api_key
+            or CHAT_STORE.latest_group_message_id(group_id) != cursor
+            or not _group_reply_allowed(group_id)
+        ):
+            return
+        delivered = await _deliver_group_action(
+            bot, group_id, parse_group_action(raw), history, current_user_id=current.user_id,
+        )
+        if delivered:
+            _record_group_proactive_reply(group_id)
+
+
+def _chat_reply_messages(reply: str, reply_message_id: int | None = None):
+    from nonebot.adapters.onebot.v11 import MessageSegment
+
+    for index, chunk in enumerate(split_chat_reply(reply, max_text_length=CONFIG.chat_reply_max_length)):
+        message = Message()
+        if index == 0 and reply_message_id is not None:
+            message += MessageSegment.reply(reply_message_id)
+        for kind, value in chunk:
+            message += MessageSegment.face(int(value)) if kind == "face" else MessageSegment.text(value)
+        if message:
+            yield message, "".join(f"[qq_face:{value}]" if kind == "face" else value for kind, value in chunk)
+
+
+async def _deliver_group_action(
+    bot: Bot, group_id: int, action: GroupAction, history: list[StoredMessage], *,
+    current_user_id: int | None, reply_message_id: int | None = None,
+) -> bool:
+    delivered = False
+    for index, (message, stored_text) in enumerate(_chat_reply_messages(action.reply, reply_message_id)):
+        if index:
+            await asyncio.sleep(0.8)
+        result = await bot.call_api("send_group_msg", group_id=group_id, message=message)
+        platform_id = result.get("message_id") if isinstance(result, dict) else None
+        CHAT_STORE.append_group_message(
+            group_id, CHAT_ROLE.name, stored_text, user_id=int(bot.self_id),
+            message_id=platform_id, role="assistant",
+        )
+        delivered = True
+        CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
+        _group_chat_last_reply[group_id] = time.time()
+    eligible = {
+        item.message_id: item for item in history
+        if item.role == "user" and item.message_id is not None and item.user_id != int(bot.self_id)
+    }
+    if action.reaction and action.reaction[0] in eligible and action.reaction[1] in SUPER_FACES:
+        message_id, emoji_id = action.reaction
+        if not CHAT_STORE.interaction_sent(group_id, message_id, "reaction"):
+            try:
+                await bot.call_api("set_msg_emoji_like", message_id=message_id, emoji_id=str(emoji_id), set=True)
+                CHAT_STORE.record_interaction(group_id, message_id, "reaction")
+                delivered = True
+            except Exception as error:
+                LOGGER.warning("群聊表情回应失败 group_id={} error_type={}", group_id, type(error).__name__)
+    current = next((item for item in reversed(history) if item.role == "user"), None)
+    if (
+        action.poke and current_user_id is not None and current_user_id != int(bot.self_id)
+        and current and current.user_id == current_user_id and current.message_id is not None
+        and not CHAT_STORE.interaction_sent(group_id, current.message_id, "poke")
+    ):
+        try:
+            await bot.call_api("group_poke", group_id=group_id, user_id=current_user_id)
+            CHAT_STORE.record_interaction(group_id, current.message_id, "poke")
+            delivered = True
+        except Exception as error:
+            LOGGER.warning("群聊戳一戳失败 group_id={} error_type={}", group_id, type(error).__name__)
+    if delivered:
+        CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
+        _group_chat_last_reply[group_id] = time.time()
+    return delivered
 
 
 async def _send_chat_reply(matcher, reply: str, *, reply_message_id: int | None = None) -> None:
-    for index, chunk in enumerate(split_chat_reply(reply, max_text_length=CONFIG.chat_reply_max_length)):
+    for index, (message, _) in enumerate(_chat_reply_messages(reply, reply_message_id)):
         if index:
             await asyncio.sleep(0.8)
-        message = Message()
-        if index == 0 and reply_message_id is not None:
-            from nonebot.adapters.onebot.v11 import MessageSegment
-
-            message += MessageSegment.reply(reply_message_id)
-        for kind, value in chunk:
-            if kind == "face":
-                from nonebot.adapters.onebot.v11 import MessageSegment
-
-                message += MessageSegment.face(int(value))
-            else:
-                message += value
-        if message:
-            await matcher.send(message)
+        await matcher.send(message)
 
 
 def _target_from_event(event: MessageEvent) -> QueueTarget | None:
