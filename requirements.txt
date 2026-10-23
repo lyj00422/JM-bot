@@ -4,3 +4,4 @@ jmcomic>=2.7.0
 Pillow>=10.0.0
 img2pdf>=0.5.1
 pytest>=8.0.0
+cryptography>=42.0.0

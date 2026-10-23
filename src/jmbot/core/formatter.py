@@ -67,7 +67,7 @@ def format_help(
             "/ds 你的 API Key",
             "/ds 状态",
             "/ds 清除",
-            "/聊天 清空",
+            "/ds 清空",
         ],
     }
     if topic is not None:
@@ -80,7 +80,45 @@ def format_help(
             f"{prefix} 帮助 下载  - PDF、ZIP、章节、预览",
             f"{prefix} 帮助 收藏  - 收藏管理",
             f"{prefix} 帮助 任务  - 进度、队列、撤回、历史",
-            f"{admin_command_prefix} 帮助      - 管理员命令",
+            f"/ds 帮助      - 聊天配置与控制；{admin_command_prefix} 帮助 - 下载管理员命令",
+        ]
+    )
+
+
+def format_chat_help(command_prefix: str = "/ds", *, topic: str | None = None) -> str:
+    """Return the chat help index or one bounded topic page."""
+
+    prefix = command_prefix
+    topics = {
+        "私聊": [
+            "私聊聊天：",
+            f"{prefix} 你的 API Key",
+            f"{prefix} 状态",
+            f"{prefix} 清除",
+            f"{prefix} 清空",
+        ],
+        "群聊": [
+            "群聊 Key（管理员私聊机器人）：",
+            f"{prefix} 群聊key 群号 API_KEY",
+            f"{prefix} 群聊key 群号 查看",
+            f"{prefix} 群聊key 群号 清除",
+        ],
+        "管理": [
+            "聊天开关（管理员私聊机器人）：",
+            f"{prefix} 开启",
+            f"{prefix} 停止",
+            f"{prefix} 状态",
+        ],
+    }
+    if topic is not None:
+        key = topic.strip()
+        return "\n".join(topics[key]) if key in topics else "可用帮助主题：私聊｜群聊｜管理"
+    return "\n".join(
+        [
+            "JMbot 聊天帮助：",
+            f"{prefix} 帮助 私聊  - 你的 Key、状态、清除、清空",
+            f"{prefix} 帮助 群聊  - 群聊 Key 设置、查看、清除",
+            f"{prefix} 帮助 管理  - 聊天开关与全局状态",
         ]
     )
 
@@ -98,7 +136,6 @@ def format_admin_help(admin_command_prefix: str = "/jmg") -> str:
             f"{prefix} 失败 最近 5",
             f"{prefix} 失败 21",
             f"{prefix} 失败 删除 21",
-            f"{prefix} 群聊key 群号 API_KEY；查看|清除；聊天停止|开启|状态",
         ]
     )
 

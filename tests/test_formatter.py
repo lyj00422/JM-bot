@@ -6,6 +6,7 @@ from jmbot.core.formatter import (
     format_admin_help,
     format_admin_failed_detail,
     format_admin_failed_tasks,
+    format_chat_help,
     format_favorite_list,
     format_help,
     format_query_failed,
@@ -53,6 +54,34 @@ class FormatterTest(unittest.TestCase):
         self.assertLessEqual(len([line for line in admin.splitlines() if line.strip()]), 10)
         self.assertIn("/jmg kill 123456", admin)
         self.assertIn("/jmg 失败 删除 21", admin)
+
+    def test_chat_help_index_mirrors_the_main_help_style(self):
+        message = format_chat_help("/ds")
+
+        lines = [line for line in message.splitlines() if line.strip()]
+        self.assertLessEqual(len(lines), 7)
+        self.assertEqual(lines[0], "JMbot 聊天帮助：")
+        self.assertIn("/ds 帮助 私聊", message)
+        self.assertIn("/ds 帮助 群聊", message)
+        self.assertIn("/ds 帮助 管理", message)
+        for line in lines[1:]:
+            self.assertIn("  - ", line)
+        self.assertNotIn("群聊key 群号 API_KEY", message)
+
+    def test_chat_help_topics_are_bounded_and_specific(self):
+        expectations = {
+            "私聊": "/ds 你的 API Key",
+            "群聊": "/ds 群聊key 群号 查看",
+            "管理": "/ds 开启",
+        }
+        for topic, command in expectations.items():
+            with self.subTest(topic=topic):
+                message = format_chat_help("/ds", topic=topic)
+                self.assertLessEqual(len([line for line in message.splitlines() if line.strip()]), 6)
+                self.assertIn(command, message)
+
+    def test_chat_help_unknown_topic_lists_topics(self):
+        self.assertEqual(format_chat_help("/ds", topic="未知"), "可用帮助主题：私聊｜群聊｜管理")
 
     def test_format_album_detail_limits_tags_and_chapters(self):
         detail = AlbumDetail(

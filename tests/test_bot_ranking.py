@@ -13,6 +13,18 @@ from jmbot.core.preview_service import CoverResult
 
 
 class BotRankingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_reply_quotes_trigger_message_once(self):
+        matcher = AsyncMock()
+        config = SimpleNamespace(chat_reply_max_length=500)
+
+        with patch.object(bot_module, "CONFIG", config):
+            await bot_module._send_chat_reply(matcher, "收到", reply_message_id=1234)
+
+        message = matcher.send.await_args.args[0]
+        self.assertEqual(message[0].type, "reply")
+        self.assertEqual(message[0].data["id"], "1234")
+        self.assertEqual(str(message[1]), "收到")
+
     async def test_send_ranking_card_copies_covers_delivers_and_cleans(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

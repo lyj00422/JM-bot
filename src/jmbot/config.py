@@ -45,11 +45,18 @@ class BotConfig:
     history_max_per_user: int
     chat_db_path: Path
     chat_role_path: Path
+    chat_master_key_path: Path
     chat_endpoint: str
+    chat_proxy: str
     chat_model: str
     chat_timeout_seconds: int
     group_chat_history_limit: int
+    group_chat_context_seconds: int
     group_chat_active_seconds: int
+    group_chat_reply_cooldown_seconds: int
+    group_chat_proactive_limit: int
+    chat_reply_max_length: int
+    chat_aliases: tuple[str, ...]
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -147,9 +154,24 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         history_max_per_user=parse_positive_int(source, "JM_BOT_HISTORY_MAX_PER_USER", 50),
         chat_db_path=Path(source.get("JM_BOT_CHAT_DB", "data/chat.sqlite3")),
         chat_role_path=Path(source.get("JM_BOT_CHAT_ROLE", "data/chat_role.json")),
+        chat_master_key_path=Path(source.get("JM_BOT_CHAT_MASTER_KEY_PATH", "data/chat-master.key")),
         chat_endpoint=source.get("JM_BOT_CHAT_ENDPOINT", "https://api.deepseek.com/chat/completions"),
+        chat_proxy=source.get("JM_BOT_CHAT_PROXY", "").strip(),
         chat_model=source.get("JM_BOT_CHAT_MODEL", "deepseek-flash"),
         chat_timeout_seconds=parse_positive_int(source, "JM_BOT_CHAT_TIMEOUT_SECONDS", 60),
-        group_chat_history_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_HISTORY_LIMIT", 30),
+        group_chat_history_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_HISTORY_LIMIT", 12),
+        group_chat_context_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_CONTEXT_SECONDS", 600),
         group_chat_active_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_ACTIVE_SECONDS", 600),
+        group_chat_reply_cooldown_seconds=parse_positive_int(
+            source, "JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS", 45
+        ),
+        group_chat_proactive_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT", 3),
+        chat_reply_max_length=parse_positive_int(source, "JM_BOT_CHAT_REPLY_MAX_LENGTH", 500),
+        chat_aliases=tuple(
+            alias.strip()
+            for alias in source.get(
+                "JM_BOT_CHAT_ALIASES", "大肥鱼,大肥鱼喵,吃白饭大肥鱼,JM大使"
+            ).split(",")
+            if alias.strip()
+        ),
     )

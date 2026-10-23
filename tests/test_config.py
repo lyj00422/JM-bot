@@ -47,6 +47,7 @@ class ConfigTest(unittest.TestCase):
                 "JM_BOT_GROUP_FOLDER": "Archive",
                 "JM_BOT_HISTORY_RETENTION_DAYS": "14",
                 "JM_BOT_HISTORY_MAX_PER_USER": "30",
+                "JM_BOT_CHAT_PROXY": "http://127.0.0.1:8080",
             }
         )
 
@@ -82,6 +83,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.group_folder_name, "Archive")
         self.assertEqual(config.history_retention_days, 14)
         self.assertEqual(config.history_max_per_user, 30)
+        self.assertEqual(config.chat_proxy, "http://127.0.0.1:8080")
+        self.assertEqual(config.group_chat_history_limit, 12)
+        self.assertEqual(config.group_chat_context_seconds, 600)
 
     def test_load_config_cleans_after_upload_by_default(self):
         self.assertTrue(load_config({}).clean_after_upload)
@@ -92,6 +96,9 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_uses_queue_db_default(self):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
         self.assertEqual(load_config({}).user_db_path, Path("data/user.sqlite3"))
+
+    def test_chat_proxy_is_empty_by_default(self):
+        self.assertEqual(load_config({}).chat_proxy, "")
 
     def test_load_config_enables_general_defaults(self):
         config = load_config({})
@@ -111,6 +118,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.admin_command_prefix, "/jmg")
         self.assertEqual(config.history_retention_days, 7)
         self.assertEqual(config.history_max_per_user, 50)
+        self.assertEqual(config.group_chat_history_limit, 12)
+        self.assertEqual(config.group_chat_context_seconds, 600)
 
     def test_load_config_rejects_invalid_resource_limits(self):
         invalid_cases = [

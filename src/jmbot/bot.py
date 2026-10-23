@@ -6,9 +6,9 @@ import shutil
 import tempfile
 from pathlib import Path
 import nonebot
-from nonebot import get_driver, on_message
+from nonebot import get_driver, logger, on_message
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageEvent, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageEvent, PrivateMessageEvent
 from nonebot.rule import Rule
 
 from jmbot.core.catalog_service import RankingQuery
@@ -18,9 +18,12 @@ from jmbot.core.chat_service import (
     ChatStore,
     build_group_messages,
     build_private_messages,
+    extract_chat_reply,
+    face_marker,
     load_chat_role,
-    parse_group_decision,
+    parse_group_response,
     request_chat_completion,
+    split_chat_reply,
 )
 from jmbot.config import load_config
 from jmbot.core.command_service import (
@@ -53,6 +56,7 @@ from jmbot.core.command_feedback import processing_ack_message
 from jmbot.core.detail_cache import DetailCache
 from jmbot.core.formatter import (
     format_admin_help,
+    format_chat_help,
     format_help,
     format_ranking_card_commands,
     format_ranking_categories,
@@ -62,8 +66,14 @@ from jmbot.core.formatter import (
 from jmbot.core.jm_service import DownloadRequest, DownloadSettings, download_directory_for_request
 from jmbot.core.pdf_builder import collect_images
 from jmbot.core.job_executor import run_album_job_with_timeout
-from jmbot.core.message_scope import is_friend_private_message
-from jmbot.core.parser import JmMessage, parse_jm_admin_message, parse_jm_message
+from jmbot.core.message_scope import (
+    at_targets,
+    is_at_bot,
+    is_friend_private_message,
+    is_reply_to_bot,
+    message_segments,
+)
+from jmbot.core.parser import JmMessage, parse_ds_message, parse_jm_admin_message, parse_jm_message
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 from jmbot.core.query_executor import query_cover
 from jmbot.core.queue_processor import process_next_album_job
@@ -92,10 +102,13 @@ DOWNLOAD_SETTINGS = DownloadSettings(
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 USER_STORE = UserDataStore(CONFIG.user_db_path)
-CHAT_STORE = ChatStore(CONFIG.chat_db_path)
+CHAT_STORE = ChatStore(CONFIG.chat_db_path, master_key_path=CONFIG.chat_master_key_path)
 CHAT_ROLE = load_chat_role(CONFIG.chat_role_path)
 _private_chat_locks: dict[int, asyncio.Lock] = {}
 _group_chat_locks: dict[int, asyncio.Lock] = {}
+_group_chat_last_reply: dict[int, float] = {}
+_group_chat_proactive_replies: dict[int, list[float]] = {}
+_group_alias_cache: dict[int, tuple[float, set[str]]] = {}
 DETAIL_CACHE = DetailCache(
     ttl_seconds=CONFIG.detail_cache_ttl_seconds,
     max_entries=CONFIG.query_cache_max_entries,
@@ -104,6 +117,7 @@ QUERY_SEMAPHORE = asyncio.Semaphore(CONFIG.query_max_concurrency)
 _queue_worker_lock = asyncio.Lock()
 _queue_worker_task: asyncio.Task[None] | None = None
 _queue_recovered = False
+LOGGER = logger
 
 nonebot.init(
     driver="~fastapi+~websockets",
@@ -138,8 +152,104 @@ async def _is_jm_command(event: MessageEvent) -> bool:
 jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
 
 
+async def _is_ds_command(event: MessageEvent) -> bool:
+    return parse_ds_message(event.get_plaintext()) is not None
+
+
+ds_matcher = on_message(rule=Rule(_is_ds_command), priority=9, block=True)
+
+
+@ds_matcher.handle()
+async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
+    command = parse_ds_message(event.get_plaintext())
+    if command is None:
+        return
+    is_private = isinstance(event, PrivateMessageEvent) and is_friend_private_message(event)
+    is_admin = int(event.user_id) == CHAT_ADMIN_ID
+
+    if command.action == "chat_help":
+        await ds_matcher.send(format_chat_help("/ds", topic=command.help_topic))
+        return
+
+    if command.action in {"chat_private_key", "chat_private_status", "chat_private_clear", "chat_clear"}:
+        if not is_private:
+            await ds_matcher.send("请私聊机器人管理你的聊天配置和记录。")
+            return
+        if command.action == "chat_private_key":
+            if not command.text:
+                await ds_matcher.send("用法：/ds 你的 API Key；查看：/ds 状态；清除：/ds 清除")
+                return
+            try:
+                CHAT_STORE.set_private_key(event.user_id, command.text)
+            except ValueError:
+                await ds_matcher.send("API Key 不能为空。")
+                return
+            LOGGER.info("私聊 API Key 已更新 user_id={}", event.user_id)
+            await ds_matcher.send("你的 DeepSeek API Key 已保存。")
+        elif command.action == "chat_private_status":
+            if is_admin:
+                state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
+                await ds_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
+            else:
+                configured = CHAT_STORE.get_private_key(event.user_id) is not None
+                await ds_matcher.send(f"你的私聊 API Key：{'已配置' if configured else '未配置'}")
+        elif command.action == "chat_private_clear":
+            removed = CHAT_STORE.remove_private_key(event.user_id)
+            await ds_matcher.send("已清除你的 API Key。" if removed else "你还没有保存 API Key。")
+        else:
+            CHAT_STORE.clear_private_history(event.user_id)
+            await ds_matcher.send("已清空你的私聊历史。")
+        return
+
+    if not is_admin:
+        await ds_matcher.send("你没有聊天管理权限。")
+        return
+    if not is_private:
+        await ds_matcher.send("请管理员私聊机器人配置群聊 Key 或切换聊天功能。")
+        return
+    if command.action == "chat_enable":
+        CHAT_STORE.set_chat_enabled(True)
+        LOGGER.info("聊天功能已开启 admin_id={}", event.user_id)
+        await ds_matcher.send("聊天功能已开启，下载功能一直可用。")
+    elif command.action == "chat_disable":
+        CHAT_STORE.set_chat_enabled(False)
+        LOGGER.info("聊天功能已停止 admin_id={}", event.user_id)
+        await ds_matcher.send("聊天功能已停止，当前只保留下载功能。")
+    elif command.action == "chat_status":
+        state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
+        await ds_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
+    elif command.group_id is not None and command.action == "chat_group_key_set":
+        CHAT_STORE.set_group_key(command.group_id, command.text or "")
+        LOGGER.info("群聊 API Key 已更新 group_id={} admin_id={}", command.group_id, event.user_id)
+        await ds_matcher.send(f"群 {command.group_id} 的聊天 Key 已保存，余额不足状态已清除。")
+    elif command.group_id is not None and command.action == "chat_group_key_status":
+        key = CHAT_STORE.get_group_key(command.group_id)
+        exhausted = CHAT_STORE.is_group_balance_exhausted(command.group_id)
+        await ds_matcher.send(
+            f"群 {command.group_id}：Key{'已配置' if key else '未配置'}；"
+            f"余额状态：{'余额不足' if exhausted else '正常'}"
+        )
+    elif command.group_id is not None and command.action == "chat_group_key_clear":
+        removed = CHAT_STORE.remove_group_key(command.group_id)
+        LOGGER.info("群聊 API Key 已清除 group_id={} admin_id={}", command.group_id, event.user_id)
+        await ds_matcher.send(f"群 {command.group_id} 的聊天 Key 已{'清除' if removed else '不存在'}。")
+
+
 async def _is_chat_message(event: MessageEvent) -> bool:
+    if isinstance(event, GroupMessageEvent):
+        targets = at_targets(event)
+        if targets:
+            LOGGER.info(
+                "收到群聊含 @ group_id={} user_id={} bot_id={} at_targets={} segments={}",
+                event.group_id,
+                event.user_id,
+                getattr(event, "self_id", "unknown"),
+                targets,
+                [getattr(segment, "type", "unknown") for segment in message_segments(event)],
+            )
     if not CHAT_STORE.is_chat_enabled():
+        if isinstance(event, GroupMessageEvent) and at_targets(event):
+            LOGGER.warning("群聊 @ 被聊天总开关拦截 group_id={} user_id={}", event.group_id, event.user_id)
         return False
     if not isinstance(event, (GroupMessageEvent, PrivateMessageEvent)):
         return False
@@ -150,7 +260,11 @@ async def _is_chat_message(event: MessageEvent) -> bool:
         return False
     if parse_jm_admin_message(plaintext, CONFIG.admin_command_prefix):
         return False
-    return _message_content(event).strip() != ""
+    if _message_content(event).strip():
+        return True
+    # A bare "@bot" keeps no text once the adapter strips the at segment, but it
+    # is still an explicit call and must reach the group handler.
+    return isinstance(event, GroupMessageEvent) and is_at_bot(event, getattr(event, "self_id", ""))
 
 
 chat_matcher = on_message(rule=Rule(_is_chat_message), priority=20, block=True)
@@ -160,6 +274,7 @@ chat_matcher = on_message(rule=Rule(_is_chat_message), priority=20, block=True)
 async def handle_chat_message(bot: Bot, event: MessageEvent) -> None:
     if isinstance(event, GroupMessageEvent):
         if CONFIG.allowed_group_ids and event.group_id not in CONFIG.allowed_group_ids:
+            LOGGER.warning("群聊被白名单拦截 group_id={} user_id={}", event.group_id, event.user_id)
             return
         await _handle_group_chat(bot, event)
     elif isinstance(event, PrivateMessageEvent) and is_friend_private_message(event):
@@ -214,87 +329,6 @@ async def _handle_parsed_command(
     command: JmMessage,
     target: QueueTarget,
 ) -> bool:
-    if command.action == "chat_private_key":
-        if not isinstance(event, PrivateMessageEvent):
-            await jm_matcher.send("请私聊机器人设置你的 API Key。")
-            return False
-        if not command.text:
-            await jm_matcher.send("用法：/ds 你的 API Key；查看：/ds 状态；清除：/ds 清除")
-            return False
-        try:
-            CHAT_STORE.set_private_key(event.user_id, command.text)
-        except ValueError:
-            await jm_matcher.send("API Key 不能为空。")
-            return False
-        await jm_matcher.send("你的 DeepSeek API Key 已保存。")
-        return False
-
-    if command.action == "chat_private_status":
-        if not isinstance(event, PrivateMessageEvent):
-            await jm_matcher.send("请私聊机器人查看你的聊天 Key。")
-            return False
-        configured = CHAT_STORE.get_private_key(event.user_id) is not None
-        await jm_matcher.send(f"你的私聊 API Key：{'已配置' if configured else '未配置'}")
-        return False
-
-    if command.action in {"chat_private_clear", "chat_clear"}:
-        if not isinstance(event, PrivateMessageEvent):
-            await jm_matcher.send("请私聊机器人管理你的聊天记录。")
-            return False
-        if command.action == "chat_private_clear":
-            removed = CHAT_STORE.remove_private_key(event.user_id)
-            await jm_matcher.send("已清除你的 API Key。" if removed else "你还没有保存 API Key。")
-        else:
-            CHAT_STORE.clear_private_history(event.user_id)
-            await jm_matcher.send("已清空你的私聊历史。")
-        return False
-
-    if command.action in {
-        "chat_group_key_set",
-        "chat_group_key_status",
-        "chat_group_key_clear",
-        "chat_status",
-        "chat_enable",
-        "chat_disable",
-    }:
-        if int(event.user_id) != CHAT_ADMIN_ID:
-            await jm_matcher.send("你没有聊天管理权限。")
-            return False
-        if command.action != "chat_status" and not isinstance(event, PrivateMessageEvent):
-            await jm_matcher.send("请私聊机器人配置群聊 API Key。")
-            return False
-        if command.action == "chat_status":
-            state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
-            await jm_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
-            return False
-        if command.action == "chat_enable":
-            CHAT_STORE.set_chat_enabled(True)
-            await jm_matcher.send("聊天功能已开启，下载功能一直可用。")
-            return False
-        if command.action == "chat_disable":
-            CHAT_STORE.set_chat_enabled(False)
-            await jm_matcher.send("聊天功能已停止，当前只保留下载功能。")
-            return False
-        if command.group_id is None:
-            return False
-        if command.action == "chat_group_key_set":
-            if not command.text:
-                await jm_matcher.send(f"用法：{CONFIG.admin_command_prefix} 群聊key 群号 API_KEY")
-                return False
-            CHAT_STORE.set_group_key(command.group_id, command.text)
-            await jm_matcher.send(f"群 {command.group_id} 的聊天 Key 已保存，余额不足状态已清除。")
-        elif command.action == "chat_group_key_status":
-            key = CHAT_STORE.get_group_key(command.group_id)
-            exhausted = CHAT_STORE.is_group_balance_exhausted(command.group_id)
-            await jm_matcher.send(
-                f"群 {command.group_id}：Key{'已配置' if key else '未配置'}；"
-                f"余额状态：{'余额不足' if exhausted else '正常'}"
-            )
-        else:
-            removed = CHAT_STORE.remove_group_key(command.group_id)
-            await jm_matcher.send(f"群 {command.group_id} 的聊天 Key 已{'清除' if removed else '不存在'}。")
-        return False
-
     if command.action == "request":
         if command.album_id is None:
             return False
@@ -555,10 +589,12 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
     user_id = int(event.user_id)
     api_key = CHAT_STORE.get_private_key(user_id)
     if not api_key:
+        LOGGER.warning("私聊跳过：未配置私聊 Key user_id={}", user_id)
         await chat_matcher.send("私聊需要先配置你的 DeepSeek API Key。\n发送：/ds 你的 API Key")
         return
 
     text = _message_content(event).strip()
+    LOGGER.info("私聊处理开始 user_id={} model={}", user_id, CONFIG.chat_model)
     lock = _lock_for(_private_chat_locks, user_id)
     async with lock:
         messages = build_private_messages(
@@ -576,13 +612,25 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
                 endpoint=CONFIG.chat_endpoint,
                 model=CONFIG.chat_model,
                 timeout_seconds=CONFIG.chat_timeout_seconds,
+                proxy=CONFIG.chat_proxy,
             )
         except ChatAPIError as error:
+            LOGGER.error(
+                "私聊 DeepSeek 请求失败 user_id={} status_code={} error_type={}",
+                user_id,
+                error.status_code,
+                type(error).__name__,
+            )
             await chat_matcher.send(_private_error_message(error))
             return
 
         CHAT_STORE.append_private_message(user_id, "assistant", reply)
-        await chat_matcher.send(reply)
+        try:
+            await _send_chat_reply(chat_matcher, reply)
+        except Exception:
+            LOGGER.exception("私聊回复发送失败 user_id={}", user_id)
+            raise
+        LOGGER.info("私聊回复发送成功 user_id={}", user_id)
 
         if CHAT_STORE.private_message_count(user_id) > 60:
             await _compact_private_history(user_id, api_key)
@@ -590,37 +638,82 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
 
 async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
     group_id = int(event.group_id)
-    text = _message_content(event).strip()
+    mentioned = is_at_bot(event, bot.self_id)
+    text = _message_content(event).strip() or ("（只 @ 了你，没有说话）" if mentioned else "")
     sender_name = _sender_name(event)
-    mentioned = _mentions_bot(event, bot)
-    history = CHAT_STORE.group_history(group_id, limit=CONFIG.group_chat_history_limit)
-    CHAT_STORE.append_group_message(group_id, sender_name, text)
+    LOGGER.info(
+        "群聊处理开始 group_id={} user_id={} bot_id={} mentioned={} segments={}",
+        group_id,
+        event.user_id,
+        bot.self_id,
+        mentioned,
+        [getattr(segment, "type", "unknown") for segment in message_segments(event)],
+    )
+    history = CHAT_STORE.group_history(
+        group_id,
+        limit=CONFIG.group_chat_history_limit,
+        max_age_seconds=CONFIG.group_chat_context_seconds,
+    )
+    current_message_id = CHAT_STORE.append_group_message(group_id, sender_name, text)
 
     if CHAT_STORE.is_group_balance_exhausted(group_id):
+        LOGGER.warning("群聊跳过：API 余额标记不足 group_id={} mentioned={}", group_id, mentioned)
         if mentioned:
             await chat_matcher.send("大肥鱼被饿死了")
         return
 
     api_key = CHAT_STORE.get_group_key(group_id)
     if not api_key:
+        LOGGER.warning("群聊跳过：未配置群 Key group_id={} mentioned={}", group_id, mentioned)
         if mentioned:
             await chat_matcher.send("这个群还没有配置聊天 API Key。")
         return
 
     active = CHAT_STORE.is_group_active(group_id)
-    candidate = mentioned or active or _looks_like_group_candidate(text, CHAT_ROLE.name)
-    if not candidate:
+    alias_match = _looks_like_group_candidate(text, CHAT_ROLE.name, await _group_aliases(bot, event))
+    replied_to_bot = is_reply_to_bot(event, bot.self_id)
+    LOGGER.info(
+        "群聊触发判断 group_id={} mentioned={} replied_to_bot={} alias_match={} active={}",
+        group_id,
+        mentioned,
+        replied_to_bot,
+        alias_match,
+        active,
+    )
+    if not mentioned and not replied_to_bot and not alias_match:
+        LOGGER.info("群聊跳过：未命中 @、回复或昵称触发 group_id={}", group_id)
+        return
+    # @ 或回复机器人时无条件回应；昵称/关键词命中的主动回应只受冷却与频率限制。
+    # 这里不能要求 active：活跃窗口只在回复成功后才写入，否则首次关键词触发
+    # 永远不可能发生（群聊沉默的死锁）。
+    if not mentioned and not replied_to_bot and not _group_reply_allowed(group_id):
+        LOGGER.info("群聊跳过：主动回复限流 group_id={} active={}", group_id, active)
         return
 
     lock = _lock_for(_group_chat_locks, group_id)
     async with lock:
+        if (
+            not mentioned
+            and not replied_to_bot
+            and CHAT_STORE.latest_group_message_id(group_id) != current_message_id
+        ):
+            LOGGER.info("群聊跳过：被新消息覆盖的排队回复 group_id={} message_id={}", group_id, current_message_id)
+            return
         messages = build_group_messages(
             CHAT_ROLE,
             history,
             sender_name,
             text,
+            decision_required=not mentioned and not replied_to_bot,
         )
         try:
+            LOGGER.info(
+                "群聊请求 DeepSeek group_id={} model={} endpoint_host={} trigger={}",
+                group_id,
+                CONFIG.chat_model,
+                CONFIG.chat_endpoint.split("/", 3)[2] if "://" in CONFIG.chat_endpoint else "invalid",
+                "at" if mentioned else "passive",
+            )
             raw_reply = await asyncio.to_thread(
                 request_chat_completion,
                 api_key,
@@ -628,9 +721,16 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 endpoint=CONFIG.chat_endpoint,
                 model=CONFIG.chat_model,
                 timeout_seconds=CONFIG.chat_timeout_seconds,
-                json_output=not mentioned,
+                proxy=CONFIG.chat_proxy,
+                json_output=True,
             )
         except ChatAPIError as error:
+            LOGGER.error(
+                "群聊 DeepSeek 请求失败 group_id={} status_code={} error_type={}",
+                group_id,
+                error.status_code,
+                type(error).__name__,
+            )
             if error.status_code == 402:
                 CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
                 if mentioned:
@@ -639,15 +739,34 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 await chat_matcher.send(_group_error_message(error))
             return
 
-        if mentioned:
-            reply = raw_reply
-        else:
-            should_reply, reply = parse_group_decision(raw_reply)
-            if not should_reply:
-                return
+        should_reply, reply, should_poke = parse_group_response(
+            raw_reply,
+            decision_required=not mentioned and not replied_to_bot,
+        )
+        if not should_reply:
+            LOGGER.info("群聊模型决定不回复 group_id={}", group_id)
+            return
         CHAT_STORE.append_group_message(group_id, CHAT_ROLE.name, reply)
         CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
-        await chat_matcher.send(reply)
+        if not mentioned:
+            _record_group_proactive_reply(group_id)
+        _group_chat_last_reply[group_id] = time.time()
+        try:
+            if should_poke:
+                try:
+                    await bot.call_api("group_poke", group_id=group_id, user_id=int(event.user_id))
+                except Exception as error:
+                    LOGGER.warning(
+                        "群聊戳一戳发送失败 group_id={} user_id={} error_type={}",
+                        group_id,
+                        event.user_id,
+                        type(error).__name__,
+                    )
+            await _send_chat_reply(chat_matcher, reply, reply_message_id=int(event.message_id))
+        except Exception:
+            LOGGER.exception("群聊回复发送失败 group_id={}", group_id)
+            raise
+        LOGGER.info("群聊回复发送成功 group_id={} trigger={}", group_id, "at" if mentioned else "passive")
 
 
 async def _compact_private_history(user_id: int, api_key: str) -> None:
@@ -673,6 +792,7 @@ async def _compact_private_history(user_id: int, api_key: str) -> None:
             endpoint=CONFIG.chat_endpoint,
             model=CONFIG.chat_model,
             timeout_seconds=CONFIG.chat_timeout_seconds,
+            proxy=CONFIG.chat_proxy,
         )
     except ChatAPIError:
         return
@@ -718,7 +838,7 @@ def _message_content(event: MessageEvent) -> str:
         elif segment_type == "image":
             parts.append("[图片]")
         elif segment_type == "face":
-            parts.append("[表情]")
+            parts.append(face_marker(data.get("id", "")))
         elif segment_type == "reply":
             parts.append("[回复消息]")
         elif segment_type in {"record", "video", "file"}:
@@ -735,22 +855,71 @@ def _sender_name(event: GroupMessageEvent) -> str:
     )
 
 
-def _mentions_bot(event: GroupMessageEvent, bot: Bot) -> bool:
-    bot_id = str(bot.self_id)
-    return any(
-        getattr(segment, "type", "") == "at"
-        and str((getattr(segment, "data", {}) or {}).get("qq")) == bot_id
-        for segment in event.get_message()
-    )
+async def _group_aliases(bot: Bot, event: GroupMessageEvent) -> set[str]:
+    group_id = int(event.group_id)
+    now = time.time()
+    cached = _group_alias_cache.get(group_id)
+    if cached and cached[0] > now:
+        return cached[1]
+    aliases = {CHAT_ROLE.name.casefold(), *(alias.casefold() for alias in CONFIG.chat_aliases)}
+    try:
+        result = await bot.call_api("get_group_member_info", group_id=group_id, user_id=int(bot.self_id))
+        for key in ("card", "nickname"):
+            value = str(result.get(key) or "").strip().casefold() if isinstance(result, dict) else ""
+            if value:
+                aliases.add(value)
+    except Exception as error:
+        LOGGER.warning(
+            "获取机器人群昵称失败 group_id={} error_type={}",
+            group_id,
+            type(error).__name__,
+        )
+    _group_alias_cache[group_id] = (now + 3600, aliases)
+    return aliases
 
 
-def _looks_like_group_candidate(text: str, role_name: str) -> bool:
+def _group_reply_allowed(group_id: int) -> bool:
+    now = time.time()
+    last_reply = _group_chat_last_reply.get(group_id, 0.0)
+    if now - last_reply < CONFIG.group_chat_reply_cooldown_seconds:
+        return False
+    recent = [value for value in _group_chat_proactive_replies.get(group_id, []) if now - value < 600]
+    _group_chat_proactive_replies[group_id] = recent
+    return len(recent) < CONFIG.group_chat_proactive_limit
+
+
+def _record_group_proactive_reply(group_id: int) -> None:
+    _group_chat_proactive_replies.setdefault(group_id, []).append(time.time())
+
+
+def _looks_like_group_candidate(text: str, role_name: str, aliases: set[str] | None = None) -> bool:
     normalized = text.casefold()
-    if role_name.casefold() in normalized or "大肥鱼" in normalized:
+    names = aliases or {role_name.casefold(), "大肥鱼"}
+    if any(name and name in normalized for name in names):
         return True
     if any(mark in text for mark in ("？", "?")):
         return True
     return any(normalized.startswith(prefix) for prefix in ("你能", "能不能", "可以", "为什么", "怎么", "帮我"))
+
+
+async def _send_chat_reply(matcher, reply: str, *, reply_message_id: int | None = None) -> None:
+    for index, chunk in enumerate(split_chat_reply(reply, max_text_length=CONFIG.chat_reply_max_length)):
+        if index:
+            await asyncio.sleep(0.8)
+        message = Message()
+        if index == 0 and reply_message_id is not None:
+            from nonebot.adapters.onebot.v11 import MessageSegment
+
+            message += MessageSegment.reply(reply_message_id)
+        for kind, value in chunk:
+            if kind == "face":
+                from nonebot.adapters.onebot.v11 import MessageSegment
+
+                message += MessageSegment.face(int(value))
+            else:
+                message += value
+        if message:
+            await matcher.send(message)
 
 
 def _target_from_event(event: MessageEvent) -> QueueTarget | None:

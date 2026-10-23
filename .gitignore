@@ -20,6 +20,7 @@ data/options/
 data/output/
 data/*.sqlite3
 data/*.sqlite3-*
+data/chat-master.key
 
 JM-bot/
 JMbot.tar.gz

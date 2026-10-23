@@ -46,6 +46,7 @@ JmAction = Literal[
     "chat_status",
     "chat_enable",
     "chat_disable",
+    "chat_help",
 ]
 
 
@@ -214,20 +215,6 @@ def parse_jm_message(
         topic = help_match.group(1)
         return JmMessage(action="help", help_topic=topic.strip() if topic else None)
 
-    api_key_match = re.match(r"^\s*/ds(?:key)?(?:\s+(.+?))?\s*$", message, re.IGNORECASE)
-    if api_key_match is not None:
-        value = (api_key_match.group(1) or "").strip()
-        if value.casefold() in {"状态", "status"}:
-            return JmMessage(action="chat_private_status")
-        if value.casefold() in {"清除", "删除", "clear", "remove"}:
-            return JmMessage(action="chat_private_clear")
-        if value:
-            return JmMessage(action="chat_private_key", text=value)
-        return JmMessage(action="chat_private_key")
-
-    if re.match(r"^\s*/聊天\s+(?:清空|重置|clear)\s*$", message, re.IGNORECASE):
-        return JmMessage(action="chat_clear")
-
     if re.match(rf"^\s*{prefix}\s+(我的|my)\s*$", message, re.IGNORECASE):
         return JmMessage(action="my_tasks")
 
@@ -286,30 +273,54 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
     if re.match(rf"^\s*{prefix}\s+失败\s*$", message, re.IGNORECASE):
         return JmMessage(action="admin_failed")
 
-    group_key_match = re.match(
-        rf"^\s*{prefix}\s+群聊key\s+([0-9]+)\s+(.+?)\s*$",
-        message,
-        re.IGNORECASE,
-    )
-    if group_key_match is not None:
-        group_id = int(group_key_match.group(1))
-        value = group_key_match.group(2).strip()
-        if value.casefold() in {"查看", "状态", "status"}:
-            return JmMessage(action="chat_group_key_status", group_id=group_id)
-        if value.casefold() in {"清除", "删除", "clear", "remove"}:
-            return JmMessage(action="chat_group_key_clear", group_id=group_id)
-        return JmMessage(action="chat_group_key_set", group_id=group_id, text=value)
+    return None
 
-    if re.match(rf"^\s*{prefix}\s+聊天状态\s*$", message, re.IGNORECASE):
+
+def parse_ds_message(message: str, command_prefix: str = "/ds") -> JmMessage | None:
+    """Parse chat configuration commands, kept separate from JM download commands."""
+
+    prefix = re.escape(command_prefix)
+    key_match = re.match(rf"^\s*{prefix}(?:key)?(?:\s+(.+?))?\s*$", message, re.IGNORECASE)
+    if key_match is None:
+        return None
+    value = (key_match.group(1) or "").strip()
+    lowered = value.casefold()
+    help_match = re.fullmatch(r"(?:帮助|help)(?:\s+(.*))?", value, re.IGNORECASE)
+    if help_match is not None:
+        return JmMessage(action="chat_help", help_topic=(help_match.group(1) or "").strip() or None)
+    if lowered in {"状态", "status"}:
+        return JmMessage(action="chat_private_status")
+    if lowered in {"清除", "删除", "clear", "remove"}:
+        return JmMessage(action="chat_private_clear")
+    if lowered in {"清空", "重置", "history-clear"}:
+        return JmMessage(action="chat_clear")
+    if lowered in {"开启", "打开", "enable"}:
+        return JmMessage(action="chat_enable")
+    if lowered in {"停止", "关闭", "disable"}:
+        return JmMessage(action="chat_disable")
+    if lowered in {"全局状态", "系统状态", "global-status"}:
         return JmMessage(action="chat_status")
 
-    if re.match(rf"^\s*{prefix}\s+聊天(?:开启|打开|enable)\s*$", message, re.IGNORECASE):
-        return JmMessage(action="chat_enable")
+    # 同时接受 "群聊key 群号 KEY" 与更自然的 "群聊 群号 KEY"。
+    # 否则 "群聊 123 sk-xxx" 会落到下面的兜底分支，被当成私聊 Key 存下来，
+    # 之后发请求时把中文塞进 Authorization 头直接报错。
+    group_key_match = re.fullmatch(r"群聊\s*(?:key)?\s+([0-9]+)\s+(.+)", value, re.IGNORECASE)
+    if group_key_match is None:
+        group_key_match = re.fullmatch(r"(?:群|group)\s*(?:key)?\s+([0-9]+)\s+(.+)", value, re.IGNORECASE)
+    if group_key_match is not None:
+        group_id = int(group_key_match.group(1))
+        group_value = group_key_match.group(2).strip()
+        if group_value.casefold() in {"查看", "状态", "status"}:
+            return JmMessage(action="chat_group_key_status", group_id=group_id)
+        if group_value.casefold() in {"清除", "删除", "clear", "remove"}:
+            return JmMessage(action="chat_group_key_clear", group_id=group_id)
+        return JmMessage(action="chat_group_key_set", group_id=group_id, text=group_value)
 
-    if re.match(rf"^\s*{prefix}\s+聊天(?:停止|关闭|disable)\s*$", message, re.IGNORECASE):
-        return JmMessage(action="chat_disable")
-
-    return None
+    if lowered in {"群聊", "群聊key"}:
+        return JmMessage(action="chat_status")
+    if value:
+        return JmMessage(action="chat_private_key", text=value)
+    return JmMessage(action="chat_private_key")
 
 
 def _parse_chapters(value: str) -> tuple[int, ...]:
