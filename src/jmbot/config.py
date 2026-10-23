@@ -49,6 +49,8 @@ class BotConfig:
     chat_endpoint: str
     chat_proxy: str
     chat_model: str
+    chat_default_provider: str
+    chat_default_api_key: str
     chat_timeout_seconds: int
     group_chat_history_limit: int
     group_chat_context_seconds: int
@@ -167,6 +169,8 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         chat_endpoint=source.get("JM_BOT_CHAT_ENDPOINT", "https://api.deepseek.com/chat/completions"),
         chat_proxy=source.get("JM_BOT_CHAT_PROXY", "").strip(),
         chat_model=source.get("JM_BOT_CHAT_MODEL", "deepseek-flash"),
+        chat_default_provider=source.get("JM_BOT_CHAT_DEFAULT_PROVIDER", "ds_school").strip().lower(),
+        chat_default_api_key=source.get("JM_BOT_CHAT_DEFAULT_API_KEY", "").strip(),
         chat_timeout_seconds=parse_positive_int(source, "JM_BOT_CHAT_TIMEOUT_SECONDS", 60),
         group_chat_history_limit=parse_positive_int(source, "JM_BOT_GROUP_CHAT_HISTORY_LIMIT", 12),
         group_chat_context_seconds=parse_positive_int(source, "JM_BOT_GROUP_CHAT_CONTEXT_SECONDS", 600),

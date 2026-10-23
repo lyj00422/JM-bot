@@ -171,6 +171,9 @@ class ChatStore:
 
     def set_private_key(self, user_id: int, api_key: str) -> None:
         self._set_key("private_api_keys", "user_id", user_id, api_key)
+        self._set_credential("private", user_id, "ds_school", api_key)
+        self._set_active_provider("private", user_id, "ds_school")
+        self._set_inheritance("private", user_id, False)
 
     def get_private_key(self, user_id: int) -> str | None:
         return self._get_key("private_api_keys", "user_id", user_id)
@@ -180,6 +183,9 @@ class ChatStore:
 
     def set_group_key(self, group_id: int, api_key: str) -> None:
         self._set_key("group_api_keys", "group_id", group_id, api_key)
+        self._set_credential("group", group_id, "ds_school", api_key)
+        self._set_active_provider("group", group_id, "ds_school")
+        self._set_inheritance("group", group_id, False)
         with self._connection() as connection:
             connection.execute(
                 "UPDATE group_runtime_state SET balance_exhausted = 0, last_error = NULL WHERE group_id = ?",
@@ -191,6 +197,280 @@ class ChatStore:
 
     def remove_group_key(self, group_id: int) -> bool:
         return self._remove_key("group_api_keys", "group_id", group_id)
+
+    def set_private_credential(self, user_id: int, provider: str, api_key: str) -> None:
+        self._set_credential("private", user_id, provider, api_key)
+        self.set_private_active_provider(user_id, provider)
+        self.set_private_default_inheritance(user_id, False)
+
+    def get_private_credential(self, user_id: int, provider: str) -> str | None:
+        return self._get_credential("private", user_id, provider)
+
+    def remove_private_credential(self, user_id: int, provider: str) -> bool:
+        return self._remove_credential("private", user_id, provider)
+
+    def set_group_credential(self, group_id: int, provider: str, api_key: str) -> None:
+        self._set_credential("group", group_id, provider, api_key)
+        self.set_group_active_provider(group_id, provider)
+        self.set_group_default_inheritance(group_id, False)
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE group_runtime_state SET balance_exhausted=0, last_error=NULL WHERE group_id=?",
+                (group_id,),
+            )
+
+    def get_group_credential(self, group_id: int, provider: str) -> str | None:
+        return self._get_credential("group", group_id, provider)
+
+    def effective_private_credential(
+        self, user_id: int, default_key: str, default_provider: str
+    ) -> tuple[str | None, str]:
+        if self.uses_default_private_key(user_id):
+            return (default_key or self.get_default_credential(default_provider), default_provider)
+        provider = self.get_private_active_provider(user_id)
+        return self.get_private_credential(user_id, provider), provider
+
+    def effective_group_credential(
+        self, group_id: int, default_key: str, default_provider: str
+    ) -> tuple[str | None, str]:
+        if self.uses_default_group_key(group_id):
+            return (default_key or self.get_default_credential(default_provider), default_provider)
+        provider = self.get_group_active_provider(group_id)
+        return self.get_group_credential(group_id, provider), provider
+
+    def get_default_credential(self, provider: str) -> str | None:
+        return self._get_credential("default", 0, provider)
+
+    def set_default_credential(self, provider: str, api_key: str) -> None:
+        self._set_credential("default", 0, provider, api_key)
+
+    def remove_group_credential(self, group_id: int, provider: str) -> bool:
+        return self._remove_credential("group", group_id, provider)
+
+    def has_scope_credentials(self, scope: str, owner_id: int) -> bool:
+        table = "private_api_keys" if scope == "private" else "group_api_keys"
+        id_column = "user_id" if scope == "private" else "group_id"
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM chat_credentials WHERE scope=? AND owner_id=? LIMIT 1",
+                (scope, owner_id),
+            ).fetchone()
+            if row:
+                return True
+            return connection.execute(
+                f"SELECT 1 FROM {table} WHERE {id_column}=? LIMIT 1", (owner_id,)
+            ).fetchone() is not None
+
+    def stage_credential_update(
+        self, actor_id: int, scope: str, owner_id: int, provider: str, api_key: str,
+        *, ttl_seconds: int = 300,
+    ) -> None:
+        normalized = api_key.strip()
+        if not normalized:
+            raise ValueError("API Key cannot be empty")
+        encrypted = self._cipher.encrypt(normalized.encode("utf-8")).decode("ascii")
+        version_key = f"credential_version:{scope}:{owner_id}"
+        pending_key = f"pending_credential:{actor_id}:{scope}:{owner_id}"
+        with self._connection() as connection:
+            version = connection.execute("SELECT value FROM chat_settings WHERE key=?", (version_key,)).fetchone()
+            connection.execute(
+                "INSERT INTO chat_pending_credentials (pending_key, actor_id, scope, owner_id, provider, api_key, base_version, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)) "
+                "ON CONFLICT(pending_key) DO UPDATE SET provider=excluded.provider, api_key=excluded.api_key, "
+                "base_version=excluded.base_version, expires_at=excluded.expires_at",
+                (pending_key, actor_id, scope, owner_id, provider, encrypted, str(version[0]) if version else "0", f"+{ttl_seconds} seconds"),
+            )
+
+    def apply_pending_credential_update(
+        self, actor_id: int, scope: str, owner_id: int
+    ) -> tuple[bool, str | None]:
+        pending_key = f"pending_credential:{actor_id}:{scope}:{owner_id}"
+        version_key = f"credential_version:{scope}:{owner_id}"
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT provider, api_key, base_version, expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "FROM chat_pending_credentials WHERE pending_key=? AND actor_id=? AND scope=? AND owner_id=?",
+                (pending_key, actor_id, scope, owner_id),
+            ).fetchone()
+            if not row:
+                return False, None
+            provider, encrypted, base_version, active = row
+            current = connection.execute("SELECT value FROM chat_settings WHERE key=?", (version_key,)).fetchone()
+            current_version = str(current[0]) if current else "0"
+            if not active or current_version != str(base_version):
+                connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
+                return False, None
+            api_key = self._decrypt_stored_key(str(encrypted))
+            if not api_key:
+                connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
+                return False, None
+            connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
+        self.replace_scope_credential(scope, owner_id, str(provider), api_key)
+        return True, str(provider)
+
+    def cancel_pending_credential_update(self, actor_id: int, scope: str, owner_id: int) -> bool:
+        pending_key = f"pending_credential:{actor_id}:{scope}:{owner_id}"
+        with self._connection() as connection:
+            cursor = connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
+        return cursor.rowcount > 0
+
+    def _increment_credential_version(self, scope: str, owner_id: int) -> None:
+        key = f"credential_version:{scope}:{owner_id}"
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, '1') "
+                "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+                (key,),
+            )
+
+    def replace_scope_credential(self, scope: str, owner_id: int, provider: str, api_key: str) -> None:
+        normalized_provider = provider.strip().lower()
+        normalized_key = api_key.strip()
+        if not normalized_key or not re.fullmatch(r"[a-z0-9_]+", normalized_provider):
+            raise ValueError("invalid chat credential")
+        encrypted = self._cipher.encrypt(normalized_key.encode("utf-8")).decode("ascii")
+        legacy_table, legacy_column = (
+            ("private_api_keys", "user_id") if scope == "private"
+            else ("group_api_keys", "group_id")
+        )
+        inheritance_key = f"default_key:{scope}:{owner_id}"
+        provider_key = f"active_provider:{scope}:{owner_id}"
+        version_key = f"credential_version:{scope}:{owner_id}"
+        with self._connection() as connection:
+            connection.execute("DELETE FROM chat_credentials WHERE scope=? AND owner_id=?", (scope, owner_id))
+            connection.execute(f"DELETE FROM {legacy_table} WHERE {legacy_column}=?", (owner_id,))
+            connection.execute(
+                "INSERT INTO chat_credentials (scope, owner_id, provider, api_key, updated_at) "
+                "VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                (scope, owner_id, normalized_provider, encrypted),
+            )
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, '0') "
+                "ON CONFLICT(key) DO UPDATE SET value='0'",
+                (inheritance_key,),
+            )
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (provider_key, normalized_provider),
+            )
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, '1') "
+                "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+                (version_key,),
+            )
+            if scope == "group":
+                connection.execute(
+                    "UPDATE group_runtime_state SET balance_exhausted=0, last_error=NULL WHERE group_id=?",
+                    (owner_id,),
+                )
+
+    def uses_default_private_key(self, user_id: int) -> bool:
+        return self._get_inheritance("private", user_id)
+
+    def uses_default_group_key(self, group_id: int) -> bool:
+        return self._get_inheritance("group", group_id)
+
+    def set_private_default_inheritance(self, user_id: int, enabled: bool) -> None:
+        self._set_inheritance("private", user_id, enabled)
+
+    def set_group_default_inheritance(self, group_id: int, enabled: bool) -> None:
+        self._set_inheritance("group", group_id, enabled)
+
+    def get_private_active_provider(self, user_id: int) -> str:
+        return self._get_active_provider("private", user_id)
+
+    def get_group_active_provider(self, group_id: int) -> str:
+        return self._get_active_provider("group", group_id)
+
+    def set_private_active_provider(self, user_id: int, provider: str) -> None:
+        self._set_active_provider("private", user_id, provider)
+
+    def set_group_active_provider(self, group_id: int, provider: str) -> None:
+        self._set_active_provider("group", group_id, provider)
+
+    def _set_credential(self, scope: str, owner_id: int, provider: str, api_key: str) -> None:
+        normalized_provider = provider.strip().lower()
+        if not normalized_provider or not re.fullmatch(r"[a-z0-9_]+", normalized_provider):
+            raise ValueError("invalid credential provider")
+        normalized = api_key.strip()
+        if not normalized:
+            raise ValueError("API Key cannot be empty")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO chat_credentials (scope, owner_id, provider, api_key, updated_at)
+                VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ON CONFLICT(scope, owner_id, provider) DO UPDATE SET
+                    api_key = excluded.api_key, updated_at = excluded.updated_at
+                """,
+                (scope, owner_id, normalized_provider, self._cipher.encrypt(normalized.encode("utf-8")).decode("ascii")),
+            )
+        self._increment_credential_version(scope, owner_id)
+
+    def _get_credential(self, scope: str, owner_id: int, provider: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT api_key FROM chat_credentials WHERE scope=? AND owner_id=? AND provider=?",
+                (scope, owner_id, provider.strip().lower()),
+            ).fetchone()
+        if row:
+            return self._decrypt_stored_key(row[0])
+        if provider.strip().lower() == "ds_school":
+            legacy_getter = self.get_private_key if scope == "private" else self.get_group_key
+            return legacy_getter(owner_id)
+        return None
+
+    def _remove_credential(self, scope: str, owner_id: int, provider: str) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "DELETE FROM chat_credentials WHERE scope=? AND owner_id=? AND provider=?",
+                (scope, owner_id, provider.strip().lower()),
+            )
+            removed = cursor.rowcount > 0
+            if provider.strip().lower() == "ds_school":
+                table, id_column = (
+                    ("private_api_keys", "user_id") if scope == "private"
+                    else ("group_api_keys", "group_id")
+                )
+                legacy = connection.execute(
+                    f"DELETE FROM {table} WHERE {id_column}=?", (owner_id,)
+                )
+                removed = removed or legacy.rowcount > 0
+        return removed
+
+    def _get_inheritance(self, scope: str, owner_id: int) -> bool:
+        key = f"default_key:{scope}:{owner_id}"
+        with self._connection() as connection:
+            row = connection.execute("SELECT value FROM chat_settings WHERE key=?", (key,)).fetchone()
+        return row is None or str(row[0]) == "1"
+
+    def _set_inheritance(self, scope: str, owner_id: int, enabled: bool) -> None:
+        key = f"default_key:{scope}:{owner_id}"
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, "1" if enabled else "0"),
+            )
+
+    def _get_active_provider(self, scope: str, owner_id: int) -> str:
+        key = f"active_provider:{scope}:{owner_id}"
+        with self._connection() as connection:
+            row = connection.execute("SELECT value FROM chat_settings WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row and str(row[0]).strip() else "ds_school"
+
+    def _set_active_provider(self, scope: str, owner_id: int, provider: str) -> None:
+        normalized = provider.strip().lower()
+        if not re.fullmatch(r"[a-z0-9_]+", normalized):
+            raise ValueError("invalid credential provider")
+        key = f"active_provider:{scope}:{owner_id}"
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO chat_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, normalized),
+            )
 
     def mark_group_balance_exhausted(self, group_id: int, message: str = "402") -> None:
         with self._connection() as connection:
@@ -351,8 +631,18 @@ class ChatStore:
         if not row:
             return None
         value = str(row[0])
+        return self._decrypt_stored_key(value, table=table, id_column=id_column, owner_id=owner_id)
+
+    def _decrypt_stored_key(
+        self,
+        value: str,
+        *,
+        table: str | None = None,
+        id_column: str | None = None,
+        owner_id: int | None = None,
+    ) -> str | None:
         try:
-            return self._cipher.decrypt(value.encode("ascii")).decode("utf-8")
+            return self._cipher.decrypt(str(value).encode("ascii")).decode("utf-8")
         except (InvalidToken, UnicodeEncodeError, ValueError):
             if value.startswith(FERNET_TOKEN_PREFIX):
                 # 这是密文，但当前主密钥解不开：说明主密钥变了（例如
@@ -363,11 +653,12 @@ class ChatStore:
                 return None
             # Upgrade databases written before encryption on first successful read.
             encrypted = self._cipher.encrypt(value.encode("utf-8")).decode("ascii")
-            with self._connection() as connection:
-                connection.execute(
-                    f"UPDATE {table} SET api_key = ? WHERE {id_column} = ?",
-                    (encrypted, owner_id),
-                )
+            if table and id_column and owner_id is not None:
+                with self._connection() as connection:
+                    connection.execute(
+                        f"UPDATE {table} SET api_key = ? WHERE {id_column} = ?",
+                        (encrypted, owner_id),
+                    )
             return value
 
     def _remove_key(self, table: str, id_column: str, owner_id: int) -> bool:
@@ -443,6 +734,24 @@ class ChatStore:
                 CREATE TABLE IF NOT EXISTS group_api_keys (
                     group_id INTEGER PRIMARY KEY, api_key TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS chat_credentials (
+                    scope TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    api_key TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (scope, owner_id, provider)
+                );
+                CREATE TABLE IF NOT EXISTS chat_pending_credentials (
+                    pending_key TEXT PRIMARY KEY,
+                    actor_id INTEGER NOT NULL,
+                    scope TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    api_key TEXT NOT NULL,
+                    base_version TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS private_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
                     role TEXT NOT NULL, content TEXT NOT NULL,
@@ -477,6 +786,35 @@ class ChatStore:
             }.items():
                 if name not in columns:
                     connection.execute(f"ALTER TABLE group_messages ADD COLUMN {name} {definition}")
+        self._migrate_legacy_credentials()
+
+    def _migrate_legacy_credentials(self) -> None:
+        legacy_tables = (
+            ("private_api_keys", "user_id", "private"),
+            ("group_api_keys", "group_id", "group"),
+        )
+        shared_legacy_keys: set[str] = set()
+        for table, id_column, scope in legacy_tables:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {id_column}, api_key FROM {table} ORDER BY {id_column}"
+                ).fetchall()
+            for owner_id, encrypted_key in rows:
+                api_key = self._decrypt_stored_key(str(encrypted_key), table=table, id_column=id_column, owner_id=int(owner_id))
+                if not api_key:
+                    continue
+                shared_legacy_keys.add(api_key)
+                with self._connection() as connection:
+                    exists = connection.execute(
+                        "SELECT 1 FROM chat_credentials WHERE scope=? AND owner_id=? AND provider='ds_school'",
+                        (scope, int(owner_id)),
+                    ).fetchone()
+                if not exists:
+                    self._set_credential(scope, int(owner_id), "ds_school", api_key)
+                self._set_active_provider(scope, int(owner_id), "ds_school")
+                self._set_inheritance(scope, int(owner_id), False)
+        if len(shared_legacy_keys) == 1 and self.get_default_credential("ds_school") is None:
+            self.set_default_credential("ds_school", next(iter(shared_legacy_keys)))
 
 
 def load_chat_role(path: str | Path) -> ChatRole:

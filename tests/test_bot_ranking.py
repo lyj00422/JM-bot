@@ -13,6 +13,16 @@ from jmbot.core.preview_service import CoverResult
 
 
 class BotRankingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_key_commands_are_redacted_from_nonebot_event_logs(self):
+        event = SimpleNamespace(
+            get_plaintext=lambda: "/ds 学校 very-secret-key",
+            user_id=42,
+            group_id=99,
+        )
+        description = bot_module.GroupMessageEvent.get_event_description(event)
+        self.assertIn("内容已脱敏", description)
+        self.assertNotIn("very-secret-key", description)
+
     async def test_chat_reply_quotes_trigger_message_once(self):
         matcher = AsyncMock()
         config = SimpleNamespace(chat_reply_max_length=500)

@@ -117,6 +117,69 @@ class ChatServiceTest(unittest.TestCase):
             self.assertNotEqual(stored, "sk-group-secret")
             self.assertEqual(store.get_group_key(10001), "sk-group-secret")
 
+    def test_chat_store_keeps_provider_credentials_and_default_inheritance_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ChatStore(Path(tmp) / "chat.sqlite3")
+            store.set_private_credential(42, "ds_school", "school-secret")
+            store.set_private_credential(42, "qwen_official", "qwen-secret")
+            store.set_group_credential(10001, "glm_official", "glm-secret")
+            self.assertEqual(store.get_private_credential(42, "ds_school"), "school-secret")
+            self.assertEqual(store.get_private_credential(42, "qwen_official"), "qwen-secret")
+            self.assertEqual(store.get_group_credential(10001, "glm_official"), "glm-secret")
+            self.assertFalse(store.uses_default_private_key(42))
+            self.assertFalse(store.uses_default_group_key(10001))
+
+    def test_legacy_private_and_group_keys_are_migrated_as_school_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "chat.sqlite3"
+            first = ChatStore(db_path)
+            first.set_private_key(42, "legacy-private")
+            first.set_group_key(10001, "legacy-group")
+            reopened = ChatStore(db_path)
+            self.assertEqual(reopened.get_private_credential(42, "ds_school"), "legacy-private")
+            self.assertEqual(reopened.get_group_credential(10001, "ds_school"), "legacy-group")
+            self.assertFalse(reopened.uses_default_private_key(42))
+            self.assertFalse(reopened.uses_default_group_key(10001))
+
+    def test_legacy_shared_key_is_preserved_as_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "chat.sqlite3"
+            store = ChatStore(db_path)
+            store.set_private_key(42, "shared-school-key")
+            store.set_group_key(10001, "shared-school-key")
+            reopened = ChatStore(db_path)
+            self.assertEqual(reopened.get_default_credential("ds_school"), "shared-school-key")
+            self.assertEqual(
+                reopened.effective_private_credential(43, "", "ds_school"),
+                ("shared-school-key", "ds_school"),
+            )
+
+    def test_staged_credential_requires_matching_configuration_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ChatStore(Path(tmp) / "chat.sqlite3")
+            store.set_private_credential(42, "ds_school", "old-key")
+            store.stage_credential_update(42, "private", 42, "qwen_official", "new-key")
+            applied, provider = store.apply_pending_credential_update(42, "private", 42)
+            self.assertTrue(applied)
+            self.assertEqual(provider, "qwen_official")
+            self.assertEqual(store.get_private_credential(42, "qwen_official"), "new-key")
+
+            store.stage_credential_update(42, "private", 42, "glm_official", "stale-key")
+            store.set_private_credential(42, "kimi_official", "newer-key")
+            applied, _ = store.apply_pending_credential_update(42, "private", 42)
+            self.assertFalse(applied)
+            self.assertEqual(store.get_private_credential(42, "kimi_official"), "newer-key")
+
+    def test_confirmed_provider_switch_replaces_old_scope_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ChatStore(Path(tmp) / "chat.sqlite3")
+            store.set_private_credential(42, "ds_school", "old-key")
+            store.stage_credential_update(42, "private", 42, "qwen_official", "new-key")
+            applied, _ = store.apply_pending_credential_update(42, "private", 42)
+            self.assertTrue(applied)
+            self.assertIsNone(store.get_private_credential(42, "ds_school"))
+            self.assertEqual(store.get_private_credential(42, "qwen_official"), "new-key")
+
     def test_store_isolates_keys_history_and_group_balance_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = ChatStore(Path(tmp) / "chat.sqlite3")

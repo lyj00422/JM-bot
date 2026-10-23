@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
 import shutil
@@ -86,7 +87,13 @@ from jmbot.core.message_scope import (
     is_reply_to_bot,
     message_segments,
 )
-from jmbot.core.parser import JmMessage, parse_ds_message, parse_jm_admin_message, parse_jm_message
+from jmbot.core.parser import (
+    JmMessage,
+    parse_chat_config_message,
+    is_chat_credential_message,
+    parse_jm_admin_message,
+    parse_jm_message,
+)
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
 from jmbot.core.query_executor import query_cover
 from jmbot.core.queue_processor import process_next_album_job
@@ -135,6 +142,62 @@ _queue_worker_task: asyncio.Task[None] | None = None
 _queue_recovered = False
 LOGGER = logger
 
+
+def _effective_private_chat_key(user_id: int) -> tuple[str | None, str]:
+    return CHAT_STORE.effective_private_credential(
+        user_id, CONFIG.chat_default_api_key, CONFIG.chat_default_provider
+    )
+
+
+def _effective_group_chat_key(group_id: int) -> tuple[str | None, str]:
+    return CHAT_STORE.effective_group_credential(
+        group_id, CONFIG.chat_default_api_key, CONFIG.chat_default_provider
+    )
+
+
+def _chat_endpoint(provider: str) -> str:
+    env_name = {
+        "ds_school": "JM_BOT_CHAT_SCHOOL_ENDPOINT",
+        "ds_official": "JM_BOT_CHAT_DS_ENDPOINT",
+        "glm_official": "JM_BOT_CHAT_GLM_ENDPOINT",
+        "kimi_official": "JM_BOT_CHAT_KIMI_ENDPOINT",
+        "qwen_official": "JM_BOT_CHAT_QWEN_ENDPOINT",
+    }.get(provider)
+    configured = os.environ.get(env_name, "").strip() if env_name else ""
+    defaults = {
+        "ds_official": "https://api.deepseek.com/chat/completions",
+        "glm_official": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "kimi_official": "https://api.moonshot.cn/v1/chat/completions",
+        "qwen_official": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    }
+    return configured or (CONFIG.chat_endpoint if provider == "ds_school" else defaults.get(provider, CONFIG.chat_endpoint))
+
+
+def _chat_model(provider: str) -> str:
+    env_name = {
+        "ds_school": "JM_BOT_CHAT_SCHOOL_MODEL",
+        "ds_official": "JM_BOT_CHAT_DS_MODEL",
+        "glm_official": "JM_BOT_CHAT_GLM_MODEL",
+        "kimi_official": "JM_BOT_CHAT_KIMI_MODEL",
+        "qwen_official": "JM_BOT_CHAT_QWEN_MODEL",
+    }.get(provider)
+    configured = os.environ.get(env_name, "").strip() if env_name else ""
+    defaults = {
+        "ds_official": "deepseek-chat",
+        "glm_official": "glm-4-flash",
+        "kimi_official": "moonshot-v1-8k",
+        "qwen_official": "qwen-turbo",
+    }
+    return configured or (CONFIG.chat_model if provider == "ds_school" else defaults.get(provider, CONFIG.chat_model))
+
+
+def _provider_command(provider: str, argument: str) -> str:
+    if provider == "ds_school":
+        return f"/ds 学校 {argument}"
+    if provider == "ds_official":
+        return f"/ds 官方 {argument}"
+    return f"/{provider.split('_', 1)[0]} {argument}"
+
 nonebot.init(
     driver="~fastapi+~websockets",
     host=CONFIG.host,
@@ -144,6 +207,24 @@ nonebot.init(
 )
 DRIVER = get_driver()
 DRIVER.register_adapter(OneBotV11Adapter)
+
+
+def _install_chat_secret_log_redaction() -> None:
+    # NoneBot logs OneBot events before preprocessors/matchers run. Replace the
+    # adapter's content-bearing description only for credential-setting commands.
+    for event_type in (GroupMessageEvent, PrivateMessageEvent):
+        original = event_type.get_event_description
+
+        def safe_description(event: MessageEvent, original=original) -> str:
+            if is_chat_credential_message(event.get_plaintext()):
+                location = f"@[群:{event.group_id}]" if isinstance(event, GroupMessageEvent) else "私聊"
+                return f"Credential command from {event.user_id}{location} [内容已脱敏]"
+            return original(event)
+
+        event_type.get_event_description = safe_description
+
+
+_install_chat_secret_log_redaction()
 
 
 @DRIVER.on_bot_connect
@@ -187,7 +268,7 @@ jm_matcher = on_message(rule=Rule(_is_jm_command), priority=10, block=True)
 
 
 async def _is_ds_command(event: MessageEvent) -> bool:
-    return parse_ds_message(event.get_plaintext()) is not None
+    return parse_chat_config_message(event.get_plaintext()) is not None
 
 
 ds_matcher = on_message(rule=Rule(_is_ds_command), priority=9, block=True)
@@ -195,7 +276,7 @@ ds_matcher = on_message(rule=Rule(_is_ds_command), priority=9, block=True)
 
 @ds_matcher.handle()
 async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
-    command = parse_ds_message(event.get_plaintext())
+    command = parse_chat_config_message(event.get_plaintext())
     if command is None:
         return
     is_private = isinstance(event, PrivateMessageEvent) and is_friend_private_message(event)
@@ -205,7 +286,10 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
         await ds_matcher.send(format_chat_help("/ds", topic=command.help_topic))
         return
 
-    if command.action in {"chat_private_key", "chat_private_status", "chat_private_clear", "chat_clear"}:
+    provider = command.provider or "ds_official"
+    if command.action in {"chat_private_key", "chat_private_status", "chat_private_clear", "chat_clear"} or (
+        command.action in {"chat_key_confirm", "chat_key_cancel"} and command.group_id is None
+    ):
         if not is_private:
             await ds_matcher.send("请私聊机器人管理你的聊天配置和记录。")
             return
@@ -213,22 +297,38 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
             if not command.text:
                 await ds_matcher.send("用法：/ds 你的 API Key；查看：/ds 状态；清除：/ds 清除")
                 return
+            if not CHAT_STORE.uses_default_private_key(event.user_id) and CHAT_STORE.has_scope_credentials("private", int(event.user_id)):
+                CHAT_STORE.stage_credential_update(int(event.user_id), "private", int(event.user_id), provider, command.text)
+                await ds_matcher.send(
+                    "这个私聊已经在使用独立 Key，新的 Key 暂存 5 分钟。确认覆盖："
+                    + _provider_command(provider, "确认")
+                    + "；取消："
+                    + _provider_command(provider, "取消")
+                )
+                return
             try:
-                CHAT_STORE.set_private_key(event.user_id, command.text)
+                CHAT_STORE.replace_scope_credential("private", int(event.user_id), provider, command.text)
             except ValueError:
                 await ds_matcher.send("API Key 不能为空。")
                 return
-            LOGGER.info("私聊 API Key 已更新 user_id={}", event.user_id)
-            await ds_matcher.send("你的 DeepSeek API Key 已保存。")
+            LOGGER.info("私聊聊天凭据已更新 user_id={} provider={}", event.user_id, provider)
+            await ds_matcher.send(f"你的 {provider} API Key 已保存，已切换为独立 Key。")
+        elif command.action == "chat_key_confirm":
+            applied, applied_provider = CHAT_STORE.apply_pending_credential_update(int(event.user_id), "private", int(event.user_id))
+            await ds_matcher.send(f"已确认覆盖，当前使用 {applied_provider} 独立 Key。" if applied else "没有可确认的 Key，或确认已过期。")
+        elif command.action == "chat_key_cancel":
+            removed = CHAT_STORE.cancel_pending_credential_update(int(event.user_id), "private", int(event.user_id))
+            await ds_matcher.send("已取消待覆盖 Key。" if removed else "没有待覆盖的 Key。")
         elif command.action == "chat_private_status":
             if is_admin:
                 state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
                 await ds_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
             else:
-                configured = CHAT_STORE.get_private_key(event.user_id) is not None
-                await ds_matcher.send(f"你的私聊 API Key：{'已配置' if configured else '未配置'}")
+                configured = CHAT_STORE.get_private_credential(event.user_id, provider) is not None
+                inheritance = CHAT_STORE.uses_default_private_key(event.user_id)
+                await ds_matcher.send(f"你的 {provider} Key：{'已配置' if configured else '未配置'}；默认 Key：{'开启' if inheritance else '关闭'}")
         elif command.action == "chat_private_clear":
-            removed = CHAT_STORE.remove_private_key(event.user_id)
+            removed = CHAT_STORE.remove_private_credential(event.user_id, provider)
             await ds_matcher.send("已清除你的 API Key。" if removed else "你还没有保存 API Key。")
         else:
             CHAT_STORE.clear_private_history(event.user_id)
@@ -253,20 +353,56 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
         state = "运行中" if CHAT_STORE.is_chat_enabled() else "已停止"
         await ds_matcher.send(f"聊天功能：{state}；管理员 QQ：3065532050；模型：{CONFIG.chat_model}")
     elif command.group_id is not None and command.action == "chat_group_key_set":
-        CHAT_STORE.set_group_key(command.group_id, command.text or "")
-        LOGGER.info("群聊 API Key 已更新 group_id={} admin_id={}", command.group_id, event.user_id)
-        await ds_matcher.send(f"群 {command.group_id} 的聊天 Key 已保存，余额不足状态已清除。")
+        if not CHAT_STORE.uses_default_group_key(command.group_id) and CHAT_STORE.has_scope_credentials("group", command.group_id):
+            CHAT_STORE.stage_credential_update(int(event.user_id), "group", command.group_id, provider, command.text or "")
+            target = f"{command.group_id}\\确认"
+            cancel = f"{command.group_id}\\取消"
+            await ds_matcher.send(
+                "这个群已经在使用独立 Key，新的 Key 暂存 5 分钟。确认覆盖："
+                + _provider_command(provider, target)
+                + "；取消："
+                + _provider_command(provider, cancel)
+            )
+            return
+        CHAT_STORE.replace_scope_credential("group", command.group_id, provider, command.text or "")
+        LOGGER.info("群聊聊天凭据已更新 group_id={} provider={} admin_id={}", command.group_id, provider, event.user_id)
+        await ds_matcher.send(f"群 {command.group_id} 的 {provider} Key 已保存，已切换为独立 Key。")
+    elif command.action == "chat_key_confirm":
+        if command.group_id is None:
+            await ds_matcher.send("群 Key 的覆盖确认请在后台完成。")
+            return
+        applied, applied_provider = CHAT_STORE.apply_pending_credential_update(int(event.user_id), "group", command.group_id)
+        await ds_matcher.send(f"已确认覆盖群 {command.group_id} 的 {applied_provider} Key。" if applied else "没有可确认的群 Key，或确认已过期。")
+    elif command.action == "chat_key_cancel":
+        if command.group_id is None:
+            await ds_matcher.send("私聊请回复 /ds 取消。")
+            return
+        removed = CHAT_STORE.cancel_pending_credential_update(int(event.user_id), "group", command.group_id)
+        await ds_matcher.send("已取消待覆盖群 Key。" if removed else "没有待覆盖的群 Key。")
     elif command.group_id is not None and command.action == "chat_group_key_status":
-        key = CHAT_STORE.get_group_key(command.group_id)
+        key = CHAT_STORE.get_group_credential(command.group_id, provider)
         exhausted = CHAT_STORE.is_group_balance_exhausted(command.group_id)
         await ds_matcher.send(
-            f"群 {command.group_id}：Key{'已配置' if key else '未配置'}；"
+            f"群 {command.group_id}：{provider} Key{'已配置' if key else '未配置'}；默认 Key：{'开启' if CHAT_STORE.uses_default_group_key(command.group_id) else '关闭'}；"
             f"余额状态：{'余额不足' if exhausted else '正常'}"
         )
     elif command.group_id is not None and command.action == "chat_group_key_clear":
-        removed = CHAT_STORE.remove_group_key(command.group_id)
+        removed = CHAT_STORE.remove_group_credential(command.group_id, provider)
         LOGGER.info("群聊 API Key 已清除 group_id={} admin_id={}", command.group_id, event.user_id)
         await ds_matcher.send(f"群 {command.group_id} 的聊天 Key 已{'清除' if removed else '不存在'}。")
+    elif command.action == "chat_key_confirm" and command.group_id is not None:
+        applied, applied_provider = CHAT_STORE.apply_pending_credential_update(
+            int(event.user_id), "group", command.group_id
+        )
+        await ds_matcher.send(
+            f"已确认覆盖群 {command.group_id} 的 {applied_provider} Key。"
+            if applied else "没有可确认的群 Key，或确认已过期。"
+        )
+    elif command.action == "chat_key_cancel" and command.group_id is not None:
+        removed = CHAT_STORE.cancel_pending_credential_update(
+            int(event.user_id), "group", command.group_id
+        )
+        await ds_matcher.send("已取消待覆盖群 Key。" if removed else "没有待覆盖的群 Key。")
 
 
 async def _is_chat_message(event: MessageEvent) -> bool:
@@ -645,14 +781,14 @@ async def _handle_parsed_command(
 
 async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
     user_id = int(event.user_id)
-    api_key = CHAT_STORE.get_private_key(user_id)
+    api_key, provider = _effective_private_chat_key(user_id)
     if not api_key:
         LOGGER.warning("私聊跳过：未配置私聊 Key user_id={}", user_id)
-        await chat_matcher.send("私聊需要先配置你的 DeepSeek API Key。\n发送：/ds 你的 API Key")
+        await chat_matcher.send("当前私聊没有可用聊天 Key。可发送 /ds、/glm、/kimi 或 /qwen 配置独立 Key。")
         return
 
     text = _message_content(event).strip()
-    LOGGER.info("私聊处理开始 user_id={} model={}", user_id, CONFIG.chat_model)
+    LOGGER.info("私聊处理开始 user_id={} provider={} model={}", user_id, provider, _chat_model(provider))
     lock = _lock_for(_private_chat_locks, user_id)
     async with lock:
         messages = build_private_messages(
@@ -667,8 +803,8 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
                 request_chat_completion,
                 api_key,
                 messages,
-                endpoint=CONFIG.chat_endpoint,
-                model=CONFIG.chat_model,
+                endpoint=_chat_endpoint(provider),
+                model=_chat_model(provider),
                 timeout_seconds=CONFIG.chat_timeout_seconds,
                 proxy=CONFIG.chat_proxy,
             )
@@ -691,7 +827,7 @@ async def _handle_private_chat(bot: Bot, event: PrivateMessageEvent) -> None:
         LOGGER.info("私聊回复发送成功 user_id={}", user_id)
 
         if CHAT_STORE.private_message_count(user_id) > 60:
-            await _compact_private_history(user_id, api_key)
+            await _compact_private_history(user_id, api_key, provider)
 
 
 async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
@@ -720,7 +856,7 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
             await chat_matcher.send("大肥鱼被饿死了")
         return
 
-    api_key = CHAT_STORE.get_group_key(group_id)
+    api_key, provider = _effective_group_chat_key(group_id)
     if not api_key:
         LOGGER.warning("群聊跳过：未配置群 Key group_id={} mentioned={}", group_id, mentioned)
         if mentioned:
@@ -750,7 +886,7 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
     async with lock:
         if (
             not CHAT_STORE.is_chat_enabled()
-            or CHAT_STORE.get_group_key(group_id) != api_key
+            or _effective_group_chat_key(group_id) != (api_key, provider)
             or CHAT_STORE.is_group_balance_exhausted(group_id)
         ):
             return
@@ -785,16 +921,16 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
             LOGGER.info(
                 "群聊请求 DeepSeek group_id={} model={} endpoint_host={} trigger={}",
                 group_id,
-                CONFIG.chat_model,
-                CONFIG.chat_endpoint.split("/", 3)[2] if "://" in CONFIG.chat_endpoint else "invalid",
+                _chat_model(provider),
+                _chat_endpoint(provider).split("/", 3)[2] if "://" in _chat_endpoint(provider) else "invalid",
                 "at" if mentioned else "passive",
             )
             raw_reply = await asyncio.to_thread(
                 request_chat_completion,
                 api_key,
                 messages,
-                endpoint=CONFIG.chat_endpoint,
-                model=CONFIG.chat_model,
+                endpoint=_chat_endpoint(provider),
+                model=_chat_model(provider),
                 timeout_seconds=CONFIG.chat_timeout_seconds,
                 proxy=CONFIG.chat_proxy,
                 json_output=True,
@@ -806,7 +942,7 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 error.status_code,
                 type(error).__name__,
             )
-            if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
+            if error.status_code == 402 and _effective_group_chat_key(group_id) == (api_key, provider):
                 CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
                 if mentioned:
                     await chat_matcher.send("大肥鱼被饿死了")
@@ -814,7 +950,7 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
                 await chat_matcher.send(_group_error_message(error))
             return
 
-        if not CHAT_STORE.is_chat_enabled() or CHAT_STORE.get_group_key(group_id) != api_key:
+        if not CHAT_STORE.is_chat_enabled() or _effective_group_chat_key(group_id) != (api_key, provider):
             return
         if not direct and CHAT_STORE.latest_group_message_id(group_id) != current_message_id:
             return
@@ -853,7 +989,7 @@ async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
     user_id = int(event.user_id)
     if str(user_id) == str(bot.self_id):
         return
-    api_key = CHAT_STORE.get_group_key(group_id)
+    api_key, provider = _effective_group_chat_key(group_id)
     if not api_key:
         LOGGER.info("群聊戳一戳忽略：未配置群 Key group_id={}", group_id)
         return
@@ -869,7 +1005,7 @@ async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
     async with lock:
         if (
             not CHAT_STORE.is_chat_enabled()
-            or CHAT_STORE.get_group_key(group_id) != api_key
+            or _effective_group_chat_key(group_id) != (api_key, provider)
             or CHAT_STORE.is_group_balance_exhausted(group_id)
         ):
             return
@@ -899,8 +1035,8 @@ async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
                 request_chat_completion,
                 api_key,
                 messages,
-                endpoint=CONFIG.chat_endpoint,
-                model=CONFIG.chat_model,
+                endpoint=_chat_endpoint(provider),
+                model=_chat_model(provider),
                 timeout_seconds=CONFIG.chat_timeout_seconds,
                 proxy=CONFIG.chat_proxy,
                 json_output=True,
@@ -911,11 +1047,11 @@ async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
                 "群聊戳一戳 DeepSeek 请求失败 group_id={} status_code={} error_type={}",
                 group_id, error.status_code, type(error).__name__,
             )
-            if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
+            if error.status_code == 402 and _effective_group_chat_key(group_id) == (api_key, provider):
                 CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
             return
 
-        if not CHAT_STORE.is_chat_enabled() or CHAT_STORE.get_group_key(group_id) != api_key:
+        if not CHAT_STORE.is_chat_enabled() or _effective_group_chat_key(group_id) != (api_key, provider):
             return
         _attention_examined[(str(bot.self_id), group_id)] = current_message_id
         delivered = await _deliver_group_action(
@@ -928,7 +1064,7 @@ async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
         )
 
 
-async def _compact_private_history(user_id: int, api_key: str) -> None:
+async def _compact_private_history(user_id: int, api_key: str, provider: str) -> None:
     history = CHAT_STORE.private_history(user_id, limit=60)
     if len(history) <= 30:
         return
@@ -948,8 +1084,8 @@ async def _compact_private_history(user_id: int, api_key: str) -> None:
                 {"role": "system", "content": "你负责整理聊天记忆摘要，只输出摘要正文。"},
                 {"role": "user", "content": prompt},
             ],
-            endpoint=CONFIG.chat_endpoint,
-            model=CONFIG.chat_model,
+            endpoint=_chat_endpoint(provider),
+            model=_chat_model(provider),
             timeout_seconds=CONFIG.chat_timeout_seconds,
             proxy=CONFIG.chat_proxy,
         )
@@ -1086,7 +1222,7 @@ async def _observe_group(bot: Bot, group_id: int) -> None:
             return
         if CHAT_STORE.is_group_balance_exhausted(group_id) or not _group_reply_allowed(group_id):
             return
-        api_key = CHAT_STORE.get_group_key(group_id)
+        api_key, provider = _effective_group_chat_key(group_id)
         if not api_key:
             return
         cursor = CHAT_STORE.latest_group_message_id(group_id)
@@ -1110,19 +1246,19 @@ async def _observe_group(bot: Bot, group_id: int) -> None:
     # its snapshot again under the group lock before performing any actions.
     try:
         raw = await asyncio.to_thread(
-            request_chat_completion, api_key, messages, endpoint=CONFIG.chat_endpoint,
-            model=CONFIG.chat_model, timeout_seconds=CONFIG.chat_timeout_seconds,
+            request_chat_completion, api_key, messages, endpoint=_chat_endpoint(provider),
+            model=_chat_model(provider), timeout_seconds=CONFIG.chat_timeout_seconds,
             proxy=CONFIG.chat_proxy, json_output=True,
         )
     except ChatAPIError as error:
-        if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
+        if error.status_code == 402 and _effective_group_chat_key(group_id) == (api_key, provider):
             CHAT_STORE.mark_group_balance_exhausted(group_id)
         LOGGER.warning("群聊观察请求失败 group_id={} status_code={}", group_id, error.status_code)
         return
     async with lock:
         if (
             not CHAT_STORE.is_chat_enabled()
-            or CHAT_STORE.get_group_key(group_id) != api_key
+            or _effective_group_chat_key(group_id) != (api_key, provider)
             or CHAT_STORE.latest_group_message_id(group_id) != cursor
             or not _group_reply_allowed(group_id)
         ):

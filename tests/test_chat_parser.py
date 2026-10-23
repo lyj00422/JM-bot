@@ -1,6 +1,11 @@
 import unittest
 
-from jmbot.core.parser import parse_ds_message, parse_jm_admin_message, parse_jm_message
+from jmbot.core.parser import (
+    parse_chat_config_message,
+    parse_ds_message,
+    parse_jm_admin_message,
+    parse_jm_message,
+)
 
 
 class ChatParserTest(unittest.TestCase):
@@ -47,6 +52,30 @@ class ChatParserTest(unittest.TestCase):
         self.assertEqual(parse_ds_message("/ds 开启").action, "chat_enable")
         self.assertEqual(parse_ds_message("/ds 全局状态").action, "chat_status")
         self.assertIsNone(parse_jm_admin_message("/jmg 聊天停止"))
+
+    def test_provider_and_school_key_commands(self):
+        cases = {
+            "/ds sk-test": ("ds_official", None, "sk-test"),
+            "/ds 官方 sk-test": ("ds_official", None, "sk-test"),
+            "/ds 学校 model key": ("ds_school", None, "model key"),
+            "/GLM key": ("glm_official", None, "key"),
+            "/kimi 12345\\secret": ("kimi_official", 12345, "secret"),
+            "/qwen 12345\\secret": ("qwen_official", 12345, "secret"),
+            "/ds 学校 12345\\secret": ("ds_school", 12345, "secret"),
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                command = parse_chat_config_message(raw)
+                self.assertIsNotNone(command)
+                self.assertEqual(command.action, "chat_group_key_set" if expected[1] else "chat_private_key")
+                self.assertEqual((command.provider, command.group_id, command.text), expected)
+
+    def test_malformed_explicit_group_key_is_not_a_private_key(self):
+        self.assertIsNone(parse_chat_config_message("/ds 12345\\"))
+        self.assertIsNone(parse_chat_config_message("/ds 学校"))
+        self.assertIsNone(parse_chat_config_message("/glm 官方 key"))
+        confirm = parse_chat_config_message("/ds 学校 12345\\确认")
+        self.assertEqual((confirm.action, confirm.group_id, confirm.provider), ("chat_key_confirm", 12345, "ds_school"))
 
 
 if __name__ == "__main__":

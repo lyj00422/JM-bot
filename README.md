@@ -203,6 +203,28 @@ JM_BOT_CLEAN_AFTER_UPLOAD=true
 JM_BOT_GROUP_FOLDER=JM
 ```
 
+### 聊天服务与 Key
+
+聊天 Key 可在机器人好友私聊中配置自己的私聊服务；机器人管理员可在私聊中指定群聊。命令不区分大小写：
+
+```text
+/ds <KEY>                     # DeepSeek 官方；未写“学校”时默认官方
+/ds 官方 <KEY>
+/ds 学校 <KEY>
+/glm <KEY>
+/kimi <KEY>
+/qwen <KEY>
+
+/ds <群号>\<KEY>               # 设置群的 DeepSeek 官方 Key
+/ds 学校 <群号>\<KEY>
+/ds 官方 <群号>\<KEY>
+/glm <群号>\<KEY>
+/kimi <群号>\<KEY>
+/qwen <群号>\<KEY>
+```
+
+群 Key 修改只接受机器人管理员。首次从默认 Key 切换为独立 Key 会直接保存；会话已有独立 Key 时会暂存 5 分钟并要求同一操作者确认。后台配置的默认学校 Key 可由多个模型任务共用；不同服务的 API endpoint 和模型名可通过对应的 `JM_BOT_CHAT_*_ENDPOINT` 与 `JM_BOT_CHAT_*_MODEL` 环境变量覆盖。Key 加密保存在聊天数据库中，密钥命令在 NoneBot 事件日志中脱敏。
+
 资源相关配置：
 
 ```text

@@ -47,6 +47,8 @@ JmAction = Literal[
     "chat_enable",
     "chat_disable",
     "chat_help",
+    "chat_key_confirm",
+    "chat_key_cancel",
 ]
 
 
@@ -71,6 +73,7 @@ class JmMessage:
     help_topic: str | None = None
     text: str | None = None
     group_id: int | None = None
+    provider: str | None = None
 
 
 _RANKING_PERIOD_ALIASES = {
@@ -276,8 +279,41 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
     return None
 
 
+CHAT_PROVIDERS = {
+    "/ds": "ds_official",
+    "/glm": "glm_official",
+    "/kimi": "kimi_official",
+    "/qwen": "qwen_official",
+}
+
+
+def parse_chat_config_message(message: str) -> JmMessage | None:
+    """Parse all chat-provider commands before they enter the chat pipeline.
+
+    The parser deliberately returns the key as opaque text. Callers must persist it
+    immediately and must not log or pass the returned command through an LLM.
+    """
+
+    for prefix, provider in CHAT_PROVIDERS.items():
+        command = _parse_chat_provider_message(message, prefix, provider)
+        if command is not None:
+            return command
+    return None
+
+
+def is_chat_credential_message(message: str) -> bool:
+    command = parse_chat_config_message(message)
+    return bool(command and command.action in {"chat_private_key", "chat_group_key_set"} and command.text)
+
+
 def parse_ds_message(message: str, command_prefix: str = "/ds") -> JmMessage | None:
-    """Parse chat configuration commands, kept separate from JM download commands."""
+    """Backward-compatible DS parser; new code should use parse_chat_config_message."""
+
+    return _parse_chat_provider_message(message, command_prefix, "ds_official")
+
+
+def _parse_chat_provider_message(message: str, command_prefix: str, provider: str) -> JmMessage | None:
+    """Parse one provider prefix without treating malformed input as a key."""
 
     prefix = re.escape(command_prefix)
     key_match = re.match(rf"^\s*{prefix}(?:key)?(?:\s+(.+?))?\s*$", message, re.IGNORECASE)
@@ -287,19 +323,50 @@ def parse_ds_message(message: str, command_prefix: str = "/ds") -> JmMessage | N
     lowered = value.casefold()
     help_match = re.fullmatch(r"(?:帮助|help)(?:\s+(.*))?", value, re.IGNORECASE)
     if help_match is not None:
-        return JmMessage(action="chat_help", help_topic=(help_match.group(1) or "").strip() or None)
+        return JmMessage(action="chat_help", help_topic=(help_match.group(1) or "").strip() or None, provider=provider)
     if lowered in {"状态", "status"}:
-        return JmMessage(action="chat_private_status")
+        return JmMessage(action="chat_private_status", provider=provider)
     if lowered in {"清除", "删除", "clear", "remove"}:
-        return JmMessage(action="chat_private_clear")
+        return JmMessage(action="chat_private_clear", provider=provider)
     if lowered in {"清空", "重置", "history-clear"}:
-        return JmMessage(action="chat_clear")
+        return JmMessage(action="chat_clear", provider=provider)
     if lowered in {"开启", "打开", "enable"}:
-        return JmMessage(action="chat_enable")
+        return JmMessage(action="chat_enable", provider=provider)
     if lowered in {"停止", "关闭", "disable"}:
-        return JmMessage(action="chat_disable")
+        return JmMessage(action="chat_disable", provider=provider)
     if lowered in {"全局状态", "系统状态", "global-status"}:
-        return JmMessage(action="chat_status")
+        return JmMessage(action="chat_status", provider=provider)
+    if lowered in {"确认", "confirm"}:
+        return JmMessage(action="chat_key_confirm", provider=provider)
+    if lowered in {"取消", "cancel"}:
+        return JmMessage(action="chat_key_cancel", provider=provider)
+
+    # New syntax: /ds 学校 KEY, /ds 官方 KEY and /ds GROUP\\KEY.
+    # The backslash is the only unambiguous delimiter for administrator group
+    # updates because provider keys may contain spaces or punctuation.
+    source_match = re.fullmatch(r"(学校|官方)\s+(.+)", value, re.IGNORECASE)
+    if source_match is not None:
+        source, source_value = source_match.groups()
+        if provider == "ds_official":
+            provider = "ds_school" if source.casefold() == "学校" else "ds_official"
+        else:
+            return None
+        value = source_value.strip()
+    group_delimiter_match = re.fullmatch(r"([0-9]+)\\(.+)", value, re.DOTALL)
+    if group_delimiter_match is not None:
+        group_id = int(group_delimiter_match.group(1))
+        group_value = group_delimiter_match.group(2).strip()
+        if group_value.casefold() in {"确认", "confirm"}:
+            return JmMessage(action="chat_key_confirm", group_id=group_id, provider=provider)
+        if group_value.casefold() in {"取消", "cancel"}:
+            return JmMessage(action="chat_key_cancel", group_id=group_id, provider=provider)
+        if not group_value:
+            return None
+        return JmMessage(action="chat_group_key_set", group_id=group_id, text=group_value, provider=provider)
+    if re.fullmatch(r"[0-9]+\\", value):
+        return None
+    if lowered in {"学校", "官方"}:
+        return None
 
     # 同时接受 "群聊key 群号 KEY" 与更自然的 "群聊 群号 KEY"。
     # 否则 "群聊 123 sk-xxx" 会落到下面的兜底分支，被当成私聊 Key 存下来，
@@ -311,16 +378,16 @@ def parse_ds_message(message: str, command_prefix: str = "/ds") -> JmMessage | N
         group_id = int(group_key_match.group(1))
         group_value = group_key_match.group(2).strip()
         if group_value.casefold() in {"查看", "状态", "status"}:
-            return JmMessage(action="chat_group_key_status", group_id=group_id)
+            return JmMessage(action="chat_group_key_status", group_id=group_id, provider=provider)
         if group_value.casefold() in {"清除", "删除", "clear", "remove"}:
-            return JmMessage(action="chat_group_key_clear", group_id=group_id)
-        return JmMessage(action="chat_group_key_set", group_id=group_id, text=group_value)
+            return JmMessage(action="chat_group_key_clear", group_id=group_id, provider=provider)
+        return JmMessage(action="chat_group_key_set", group_id=group_id, text=group_value, provider=provider)
 
     if lowered in {"群聊", "群聊key"}:
-        return JmMessage(action="chat_status")
+        return JmMessage(action="chat_status", provider=provider)
     if value:
-        return JmMessage(action="chat_private_key", text=value)
-    return JmMessage(action="chat_private_key")
+        return JmMessage(action="chat_private_key", text=value, provider=provider)
+    return JmMessage(action="chat_private_key", provider=provider)
 
 
 def _parse_chapters(value: str) -> tuple[int, ...]:
