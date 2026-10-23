@@ -212,6 +212,14 @@ class AttentionBotTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message[0].type, 'face')
         self.assertEqual(message[0].data['id'], '364')
 
+    async def test_direct_wake_can_reply_with_sticker_and_remember_its_meaning(self):
+        await self.handle(self.event(101, '开心吗', True), '{"reply":"[sticker:131]"}')
+        message = self.bot.call_api.await_args.kwargs['message']
+        self.assertEqual([segment.type for segment in message], ['reply', 'image'])
+        history = self.store.group_history(1)
+        self.assertEqual(history[-1].role, 'assistant')
+        self.assertEqual(history[-1].content, '[sticker:131]')
+
     async def test_failed_interaction_is_not_recorded_as_delivered(self):
         self.store.append_group_message(1, '甲', 'hi', user_id=42, message_id=101)
         self.bot.call_api.side_effect = RuntimeError('unsupported')

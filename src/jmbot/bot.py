@@ -13,6 +13,7 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, Message
 from nonebot.rule import Rule
 
 from jmbot.core.catalog_service import RankingQuery
+from jmbot.core.chat_stickers import sticker_path
 from jmbot.core.chat_service import (
     CHAT_ADMIN_ID,
     ChatAPIError,
@@ -1003,14 +1004,34 @@ async def _observe_group(bot: Bot, group_id: int) -> None:
 def _chat_reply_messages(reply: str, reply_message_id: int | None = None):
     from nonebot.adapters.onebot.v11 import MessageSegment
 
-    for index, chunk in enumerate(split_chat_reply(reply, max_text_length=CONFIG.chat_reply_max_length)):
+    first = True
+    for chunk in split_chat_reply(reply, max_text_length=CONFIG.chat_reply_max_length):
         message = Message()
-        if index == 0 and reply_message_id is not None:
-            message += MessageSegment.reply(reply_message_id)
+        stored_parts = []
         for kind, value in chunk:
-            message += MessageSegment.face(int(value)) if kind == "face" else MessageSegment.text(value)
+            if kind == "sticker":
+                path = sticker_path(value)
+                if path is None:
+                    continue
+                try:
+                    image = path.read_bytes()
+                except OSError:
+                    LOGGER.warning("聊天表情包读取失败 sticker_id={}", value)
+                    continue
+                # Bytes work when NapCat and the bot do not share a filesystem.
+                message += MessageSegment.image(image)
+                stored_parts.append(f"[sticker:{value}]")
+            elif kind == "face":
+                message += MessageSegment.face(int(value))
+                stored_parts.append(f"[qq_face:{value}]")
+            else:
+                message += MessageSegment.text(value)
+                stored_parts.append(value)
         if message:
-            yield message, "".join(f"[qq_face:{value}]" if kind == "face" else value for kind, value in chunk)
+            if first and reply_message_id is not None:
+                message = Message(MessageSegment.reply(reply_message_id)) + message
+            first = False
+            yield message, "".join(stored_parts)
 
 
 async def _deliver_group_action(
