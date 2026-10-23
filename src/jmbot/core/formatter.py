@@ -80,7 +80,7 @@ def format_help(
             f"{prefix} 帮助 下载  - PDF、ZIP、章节、预览",
             f"{prefix} 帮助 收藏  - 收藏管理",
             f"{prefix} 帮助 任务  - 进度、队列、撤回、历史",
-            f"/ds 帮助      - 聊天配置与控制；{admin_command_prefix} 帮助 - 下载管理员命令",
+            "/ds 帮助      - 聊天配置与控制",
         ]
     )
 

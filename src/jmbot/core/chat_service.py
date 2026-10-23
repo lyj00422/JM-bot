@@ -226,7 +226,7 @@ class ChatStore:
         self, user_id: int, default_key: str, default_provider: str
     ) -> tuple[str | None, str]:
         if self.uses_default_private_key(user_id):
-            return (default_key or self.get_default_credential(default_provider), default_provider)
+            return (self.get_default_credential(default_provider) or default_key, default_provider)
         provider = self.get_private_active_provider(user_id)
         return self.get_private_credential(user_id, provider), provider
 
@@ -234,12 +234,51 @@ class ChatStore:
         self, group_id: int, default_key: str, default_provider: str
     ) -> tuple[str | None, str]:
         if self.uses_default_group_key(group_id):
-            return (default_key or self.get_default_credential(default_provider), default_provider)
+            return (self.get_default_credential(default_provider) or default_key, default_provider)
         provider = self.get_group_active_provider(group_id)
         return self.get_group_credential(group_id, provider), provider
 
+    def get_default_provider(self, fallback: str = "ds_school") -> str:
+        with self._connection() as connection:
+            row = connection.execute("SELECT value FROM chat_settings WHERE key='default_provider'").fetchone()
+        return str(row[0]) if row and str(row[0]) else fallback
+
+    def set_default_provider(self, provider: str) -> None:
+        normalized = provider.strip().lower()
+        if normalized not in {"ds_school", "ds_official", "glm_official", "kimi_official", "qwen_official"}:
+            raise ValueError("unsupported provider")
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO chat_settings(key,value) VALUES('default_provider',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (normalized,),
+            )
+
     def get_default_credential(self, provider: str) -> str | None:
         return self._get_credential("default", 0, provider)
+
+    def credential_scopes(self) -> list[dict[str, object]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT scope,owner_id FROM chat_credentials WHERE scope IN ('private','group') ORDER BY scope,owner_id"
+            ).fetchall()
+        result = []
+        for scope, owner_id in rows:
+            provider = self._get_active_provider(str(scope), int(owner_id))
+            result.append({
+                "scope": f"{scope}:{owner_id}",
+                "provider": provider,
+                "uses_default": self._get_inheritance(str(scope), int(owner_id)),
+                "configured": bool(self._get_credential(str(scope), int(owner_id), provider)),
+            })
+        return result
+
+    def known_group_ids(self) -> set[int]:
+        with self._connection() as connection:
+            message_ids = connection.execute("SELECT DISTINCT group_id FROM group_messages").fetchall()
+            key_ids = connection.execute("SELECT group_id FROM group_api_keys").fetchall()
+            credential_ids = connection.execute("SELECT DISTINCT owner_id FROM chat_credentials WHERE scope='group'").fetchall()
+        return {int(row[0]) for row in (*message_ids, *key_ids, *credential_ids)}
 
     def set_default_credential(self, provider: str, api_key: str) -> None:
         self._set_credential("default", 0, provider, api_key)
@@ -714,7 +753,8 @@ class ChatStore:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=10)
+        connection.execute("PRAGMA busy_timeout=10000")
         try:
             yield connection
             connection.commit()
@@ -723,6 +763,7 @@ class ChatStore:
 
     def _init_schema(self) -> None:
         with self._connection() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS private_api_keys (

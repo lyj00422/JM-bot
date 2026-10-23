@@ -63,6 +63,16 @@ class BotConfig:
     group_chat_observe_min_seconds: int
     group_chat_observe_max_seconds: int
     group_chat_followup_cooldown_seconds: int
+    # Service boundary settings.  ``all`` preserves the current single
+    # process mode; production can run ``download`` and ``chat`` separately.
+    service_role: str = "all"
+    chat_backend: str = "nonebot"
+    conversation_db_path: Path = Path("data/conversation.sqlite3")
+    admin_db_path: Path = Path("data/admin.sqlite3")
+    admin_port: int = 8081
+    chat_scheduler_workers: int = 2
+    chat_scheduler_scope_limit: int = 8
+    legacy_admin_commands: bool = False
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -115,6 +125,12 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         if item.strip()
     }
     progress_mode = source.get("JM_BOT_PROGRESS_MODE", "precise").strip().lower()
+    service_role = source.get("JM_BOT_SERVICE_ROLE", "all").strip().lower()
+    if service_role not in {"all", "download", "chat"}:
+        raise ValueError("JM_BOT_SERVICE_ROLE must be all, download or chat")
+    chat_backend = source.get("JM_BOT_CHAT_BACKEND", "nonebot").strip().lower()
+    if chat_backend not in {"nonebot", "maibot"}:
+        raise ValueError("JM_BOT_CHAT_BACKEND must be nonebot or maibot")
     if default_format not in {"pdf", "zip"}:
         raise ValueError("JM_BOT_DEFAULT_FORMAT must be pdf or zip")
     if not allowed_formats or not allowed_formats <= {"pdf", "zip"}:
@@ -193,4 +209,12 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
             ).split(",")
             if alias.strip()
         ),
+        service_role=service_role,
+        chat_backend=chat_backend,
+        conversation_db_path=Path(source.get("JM_BOT_CONVERSATION_DB", "data/conversation.sqlite3")),
+        admin_db_path=Path(source.get("JM_BOT_ADMIN_DB", "data/admin.sqlite3")),
+        admin_port=int(source.get("JM_BOT_ADMIN_PORT", "8081")),
+        chat_scheduler_workers=parse_positive_int(source, "JM_BOT_CHAT_SCHEDULER_WORKERS", 2),
+        chat_scheduler_scope_limit=parse_positive_int(source, "JM_BOT_CHAT_SCHEDULER_SCOPE_LIMIT", 8),
+        legacy_admin_commands=parse_bool(source.get("JM_BOT_LEGACY_ADMIN_COMMANDS"), False),
     )

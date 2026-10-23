@@ -31,7 +31,7 @@ class FormatterTest(unittest.TestCase):
         self.assertLessEqual(len([line for line in message.splitlines() if line.strip()]), 7)
         self.assertIn("/jm 帮助 查找", message)
         self.assertIn("/jm 帮助 排行", message)
-        self.assertIn("/jmg 帮助", message)
+        self.assertNotIn("/jmg", message)
         self.assertNotIn("kill 123456", message)
 
     def test_public_help_topics_are_bounded_and_specific(self):

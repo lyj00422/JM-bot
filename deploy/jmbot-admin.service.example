@@ -1,0 +1,19 @@
+[Unit]
+Description=JMbot loopback management backend
+After=network-online.target jmbot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jmbot
+EnvironmentFile=/etc/jmbot.env
+ExecStart=/opt/jmbot/.venv/bin/python /opt/jmbot/main_admin.py
+Restart=always
+RestartSec=5
+User=root
+
+# The app binds to 127.0.0.1. Reach it from a workstation with:
+# ssh -L 8081:127.0.0.1:8081 root@server
+
+[Install]
+WantedBy=multi-user.target

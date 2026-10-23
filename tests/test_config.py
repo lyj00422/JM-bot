@@ -96,6 +96,9 @@ class ConfigTest(unittest.TestCase):
     def test_load_config_uses_queue_db_default(self):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
         self.assertEqual(load_config({}).user_db_path, Path("data/user.sqlite3"))
+        self.assertEqual(load_config({}).service_role, "all")
+        self.assertEqual(load_config({}).chat_backend, "nonebot")
+        self.assertEqual(load_config({}).admin_port, 8081)
 
     def test_chat_proxy_is_empty_by_default(self):
         self.assertEqual(load_config({}).chat_proxy, "")
@@ -141,6 +144,8 @@ class ConfigTest(unittest.TestCase):
             {"JM_BOT_PROGRESS_MODE": "verbose"},
             {"JM_BOT_HISTORY_RETENTION_DAYS": "0"},
             {"JM_BOT_HISTORY_MAX_PER_USER": "0"},
+            {"JM_BOT_SERVICE_ROLE": "invalid"},
+            {"JM_BOT_CHAT_BACKEND": "invalid"},
         ]
 
         for env in invalid_cases:

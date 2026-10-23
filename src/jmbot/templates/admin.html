@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JMbot 管理后台</title>
+  <style>
+    :root { color-scheme: light; font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: #20262d; background: #f4f6f7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; color: #fff; background: #183e42; }
+    header strong { font-size: 16px; }
+    button, input, select, textarea { font: inherit; }
+    button { min-height: 34px; padding: 6px 12px; border: 1px solid #b7c1c5; border-radius: 4px; color: #253338; background: #fff; cursor: pointer; }
+    button:hover { background: #edf3f2; }
+    button.primary { color: #fff; border-color: #176b61; background: #176b61; }
+    button.danger { color: #9a3030; }
+    input, select, textarea { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid #bdc7ca; border-radius: 4px; color: #20262d; background: #fff; }
+    textarea { min-height: 120px; resize: vertical; }
+    label { display: grid; gap: 5px; color: #475258; }
+    .shell { display: grid; grid-template-columns: 208px minmax(0, 1fr); min-height: calc(100vh - 56px); }
+    nav { padding: 14px 10px; background: #e9eeed; border-right: 1px solid #d2dada; }
+    nav button { display: flex; width: 100%; justify-content: flex-start; margin: 3px 0; border-color: transparent; background: transparent; }
+    nav button.active { color: #145e55; background: #d8e8e4; border-color: #bdd8d1; }
+    main { max-width: 1120px; width: 100%; padding: 24px; }
+    h1 { margin: 0 0 18px; font-size: 21px; font-weight: 650; }
+    h2 { margin: 22px 0 10px; font-size: 15px; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .panel { padding: 14px 0; border-top: 1px solid #d6dddd; }
+    .status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 4px; background: #e8eeec; }
+    .status::before { width: 8px; height: 8px; border-radius: 50%; background: #82908d; content: ""; }
+    .status.ok::before { background: #238b5c; }
+    .status.bad::before { background: #c34747; }
+    .muted { color: #657177; }
+    .item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid #d8dede; }
+    .item small { display: block; color: #657177; }
+    .check { display: flex; gap: 8px; align-items: center; }
+    .check input { width: 16px; min-height: 16px; }
+    #login { max-width: 360px; margin: 12vh auto; padding: 28px; background: #fff; border: 1px solid #d7dede; border-radius: 5px; }
+    #login h1 { margin-bottom: 20px; }
+    #login form { display: grid; gap: 14px; }
+    #notice { position: fixed; right: 18px; bottom: 18px; max-width: min(420px, calc(100vw - 36px)); padding: 10px 14px; color: #fff; background: #263d3d; border-radius: 4px; display: none; }
+    pre { overflow: auto; padding: 12px; background: #edf0f0; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (max-width: 720px) {
+      .shell { grid-template-columns: 1fr; }
+      nav { display: flex; overflow-x: auto; gap: 4px; padding: 6px; border-right: 0; border-bottom: 1px solid #d2dada; }
+      nav button { width: auto; flex: 0 0 auto; white-space: nowrap; }
+      main { padding: 18px 14px; }
+      .grid { grid-template-columns: 1fr; }
+      header { padding: 0 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="login">
+    <h1>JMbot 管理后台</h1>
+    <form id="login-form">
+      <label>管理员 QQ 号<input name="qq_id" inputmode="numeric" required></label>
+      <label>后台密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">登录</button>
+    </form>
+  </div>
+  <div id="app" hidden>
+    <header><strong>JMbot 管理后台</strong><div class="row"><span id="identity"></span><button id="logout">退出</button></div></header>
+    <div class="shell">
+      <nav id="nav">
+        <button data-page="monitor" class="active">运行状态</button>
+        <button data-page="approvals">好友与群申请</button>
+        <button data-page="credentials">API Key</button>
+        <button data-page="persona">人设与成长</button>
+        <button data-page="download">JM 下载管理</button>
+        <button data-page="stickers">表情包库</button>
+        <button id="admin-nav" data-page="admins" hidden>管理员账号</button>
+      </nav>
+      <main>
+        <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><button id="refresh-status">刷新</button></section>
+        <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
+        <section class="section" id="page-credentials"><h1>API Key</h1><p class="muted">Key 保存后只显示配置状态。会话使用默认 Key 时，保存独立 Key 会切换到独立配置。</p><div id="credential-list"></div><div class="panel"><h2>设置默认 Key</h2><div class="grid"><label>默认服务商<select id="default-provider"><option value="ds_school">学校</option><option value="ds_official">DS 官方</option><option value="glm_official">GLM 官方</option><option value="kimi_official">Kimi 官方</option><option value="qwen_official">Qwen 官方</option></select></label><label>默认 API Key<input id="default-key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-default-key" class="primary">保存默认 Key</button></p></div><div class="panel"><h2>设置会话 Key</h2><div class="grid"><label>会话类型<select id="key-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="key-owner" inputmode="numeric"></label><label>服务商<select id="key-provider"><option value="ds_official">DS 官方</option><option value="ds_school">学校</option><option value="glm_official">GLM 官方</option><option value="kimi_official">Kimi 官方</option><option value="qwen_official">Qwen 官方</option></select></label><label>API Key<input id="key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-key" class="primary">保存 Key</button></p></div></section>
+        <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
+        <section class="section" id="page-download"><h1>JM 下载管理</h1><div class="panel"><h2>/jm help 回复</h2><label>帮助文本<textarea id="help-text"></textarea></label><button id="save-help" class="primary">保存帮助文本</button></div><div class="panel"><h2>会话权限</h2><div class="grid"><label>类型<select id="download-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="download-owner" inputmode="numeric"></label></div><p><button id="add-download-scope" class="primary">添加会话</button></p><div id="download-status"></div></div></section>
+        <section class="section" id="page-stickers"><h1>表情包库</h1><p><a href="/api/stickers/template">下载导入模板 ZIP</a></p><div class="panel"><label>表情包 ZIP<input id="sticker-file" type="file" accept=".zip,application/zip"></label><p><button id="upload-stickers" class="primary">上传并追加到库</button></p></div><div id="sticker-result"></div></section>
+        <section class="section" id="page-admins"><h1>管理员账号</h1><div id="admin-list"></div><div class="grid panel"><label>管理员 QQ<input id="new-admin-qq" inputmode="numeric"></label><label>设置后台密码<input id="new-admin-password" type="password" autocomplete="new-password"></label></div><p><button id="add-admin" class="primary">添加管理员</button></p></section>
+      </main>
+    </div>
+  </div>
+  <div id="notice"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let me = null;
+    async function api(url, options = {}) {
+      const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+      if (response.status === 401) { showLogin(); throw new Error("登录状态已失效"); }
+      const data = response.status === 204 ? {} : await response.json();
+      if (!response.ok) throw new Error(data.detail || "操作失败");
+      return data;
+    }
+    function note(text) { $("notice").textContent = text; $("notice").style.display = "block"; setTimeout(() => $("notice").style.display = "none", 2600); }
+    function showLogin() { $("login").hidden = false; $("app").hidden = true; }
+    async function enterApp() { me = await api("/api/me"); $("identity").textContent = `QQ ${me.qq_id}`; $("admin-nav").hidden = !me.is_super; $("login").hidden = true; $("app").hidden = false; await Promise.all([loadStatus(), loadApprovals("pending"), loadHelp(), loadDefaultPersona(), loadGlobalPolicy()]); }
+    $("login-form").addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await api("/api/login", { method: "POST", body: JSON.stringify({ qq_id: Number(form.get("qq_id")), password: form.get("password") }) }); await enterApp(); } catch (error) { note(error.message); } });
+    $("logout").onclick = async () => { await api("/api/logout", { method: "POST" }); showLogin(); };
+    $("nav").addEventListener("click", (event) => { const button = event.target.closest("button[data-page]"); if (!button) return; document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${button.dataset.page}`)); if (button.dataset.page === "admins") loadAdmins(); if (button.dataset.page === "credentials") loadCredentials(); if (button.dataset.page === "download") loadDownloadStatus(); });
+    async function loadStatus() { try { const data = await api("/api/status"); $("services").innerHTML = Object.entries(data.services).map(([name, value]) => `<div class="item"><div>${escapeHtml(name)}<small>${escapeHtml(value.detail || "")}</small></div><span class="status ${value.healthy ? "ok" : "bad"}">${value.healthy ? "在线" : "离线"}</span></div>`).join("") || "<p class='muted'>暂无服务心跳</p>"; } catch (error) { note(error.message); } }
+    $("refresh-status").onclick = loadStatus;
+    async function loadGlobalPolicy() { const value = await api("/api/policies/global"); $("global-chat").checked = value.chat; $("global-download").checked = value.download; }
+    $("save-global").onclick = async () => { try { await api("/api/policies/global/chat", { method: "PATCH", body: JSON.stringify({ enabled: $("global-chat").checked }) }); await api("/api/policies/global/download", { method: "PATCH", body: JSON.stringify({ enabled: $("global-download").checked }) }); note("全局开关已保存"); } catch (error) { note(error.message); } };
+    async function loadApprovals(status) { try { const rows = await api(`/api/approvals?status=${status}`); $("approval-list").replaceChildren(); rows.forEach((row) => { const div = document.createElement("div"); div.className = "item"; const summary = document.createElement("div"); summary.textContent = `${row.kind === "friend" ? "好友" : "群邀请"} ${row.subject_id}`; const detail = document.createElement("small"); detail.textContent = row.payload.comment || `申请状态：${row.status}`; summary.append(detail); div.append(summary); if (status === "pending") { const actions = document.createElement("div"); actions.className = "row"; for (const [label, decision] of [["通过", "approved"], ["拒绝", "rejected"]]) { const button = document.createElement("button"); button.textContent = label; button.onclick = async () => { try { await api(`/api/approvals/${row.kind}/${encodeURIComponent(row.subject_id)}/${decision}`, { method: "POST" }); note("已排入 NapCat 审批队列"); await loadApprovals(status); } catch (error) { note(error.message); } }; actions.append(button); } div.append(actions); } $("approval-list").append(div); }); if (!rows.length) $("approval-list").textContent = "没有申请记录"; } catch (error) { note(error.message); } }
+    document.querySelectorAll("[data-approval]").forEach((button) => button.onclick = () => loadApprovals(button.dataset.approval));
+    async function loadDefaultPersona() { try { const data = await api("/api/persona/default"); $("default-name").value = data.name; $("default-prompt").value = data.prompt; $("default-prompt").dataset.version = data.version; } catch (error) { note(error.message); } }
+    $("save-default-persona").onclick = async () => { try { await api("/api/persona/default", { method: "PUT", body: JSON.stringify({ name: $("default-name").value, prompt: $("default-prompt").value, expected_version: Number($("default-prompt").dataset.version) }) }); note("默认人设已保存"); await loadDefaultPersona(); } catch (error) { note(error.message); } };
+    $("load-scope").onclick = async () => {
+      const kind = $("scope-kind").value, owner = $("scope-owner").value;
+      try {
+        const data = await api(`/api/scopes/${kind}/${owner}`);
+        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-key" type="checkbox" ${data.policy.use_default_key ? "checked" : ""}>使用默认 API Key</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><label>独立基础人设<textarea id="base-persona">${escapeHtml(data.base_persona || "")}</textarea></label><p><button id="save-base-persona">保存基础人设</button></p><h2>长期记忆</h2><pre>${escapeHtml(JSON.stringify(data.memories, null, 2))}</pre><h2>成长条目</h2><div id="growth-entries"></div><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button></p>`;
+        const list = $("growth-entries");
+        data.growth.forEach((entry) => {
+          const row = document.createElement("div"); row.className = "item";
+          const text = document.createElement("div"); text.textContent = `v${entry.version} · ${entry.category} · ${entry.content} · 依据：${entry.evidence}${entry.active ? "" : "（已回退）"}${entry.frozen ? "（已冻结）" : ""}`; row.append(text);
+          if (entry.active) {
+            const actions = document.createElement("div"); actions.className = "row";
+            const freeze = document.createElement("button"); freeze.textContent = entry.frozen ? "解冻" : "冻结"; freeze.onclick = async () => { try { await api(`/api/growth/${entry.entry_id}/freeze`, { method: entry.frozen ? "DELETE" : "POST" }); await $("load-scope").onclick(); } catch (error) { note(error.message); } }; actions.append(freeze);
+            const edit = document.createElement("button"); edit.textContent = "编辑"; edit.onclick = async () => { const content = prompt("成长内容", entry.content); if (content === null) return; const evidence = prompt("依据", entry.evidence); if (evidence === null) return; try { await api(`/api/growth/${entry.entry_id}`, { method: "PATCH", body: JSON.stringify({ content, evidence }) }); await $("load-scope").onclick(); } catch (error) { note(error.message); } }; actions.append(edit); row.append(actions);
+          }
+          list.append(row);
+        });
+        $("save-scope-policy").onclick = async () => { const body = Object.fromEntries([["chat_enabled", "scope-chat"], ["download_enabled", "scope-download"], ["use_default_key", "scope-key"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked])); try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("会话开关已保存"); } catch (error) { note(error.message); } };
+        $("save-base-persona").onclick = async () => { try { await api(`/api/scopes/${kind}/${owner}/persona`, { method: "PUT", body: JSON.stringify({ prompt: $("base-persona").value, expected_version: data.base_version }) }); note("基础人设已保存"); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
+        $("add-growth").onclick = async () => { try { await api(`/api/scopes/${kind}/${owner}/growth`, { method: "POST", body: JSON.stringify({ category: $("growth-category").value, content: $("growth-content").value, evidence: $("growth-evidence").value }) }); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
+        $("rollback-growth").onclick = async () => { const version = prompt("回退到哪个版本？该版本之后的成长会停用，历史仍保留。"); if (version === null) return; try { const result = await api(`/api/scopes/${kind}/${owner}/growth/rollback/${Number(version)}`, { method: "POST" }); note(`已停用 ${result.deactivated} 条成长`); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
+      } catch (error) { note(error.message); }
+    };
+    async function loadCredentials() { try { const data = await api("/api/credentials"); $("credential-list").innerHTML = `<div class="item"><div>默认 Key<small>${escapeHtml(data.default_provider)} · ${data.default_configured ? "已配置" : "未配置"}</small></div><span class="status ${data.default_configured ? "ok" : "bad"}">${data.default_configured ? "已配置" : "未配置"}</span></div>` + data.scopes.map((row) => `<div class="item"><div>${escapeHtml(row.scope)}<small>${escapeHtml(row.provider)} · ${row.uses_default ? "使用默认 Key" : "使用独立 Key"}</small></div><span class="status ${row.configured ? "ok" : "bad"}">${row.configured ? "已配置" : "缺少 Key"}</span></div>`).join(""); } catch (error) { note(error.message); } }
+    $("save-key").onclick = async () => { const kind = $("key-kind").value, owner = $("key-owner").value, url = `/api/credentials/${kind}/${owner}/${$("key-provider").value}`, apiKey = $("key-value").value; try { await api(url, { method: "PUT", body: JSON.stringify({ api_key: apiKey }) }); $("key-value").value = ""; note("Key 已加密保存"); await loadCredentials(); } catch (error) { if (error.message.includes("确认覆盖") && confirm("该会话已配置独立 Key，覆盖当前会话 Key？")) { try { await api(url, { method: "PUT", body: JSON.stringify({ api_key: apiKey, overwrite: true }) }); $("key-value").value = ""; note("独立 Key 已覆盖"); await loadCredentials(); } catch (retryError) { note(retryError.message); } } else { note(error.message); } } };
+    $("save-default-key").onclick = async () => { try { await api(`/api/credentials/default/${$("default-provider").value}`, { method: "PUT", body: JSON.stringify({ api_key: $("default-key-value").value }) }); $("default-key-value").value = ""; note("默认 Key 已加密保存"); await loadCredentials(); } catch (error) { note(error.message); } };
+    async function loadHelp() { try { $("help-text").value = (await api("/api/help/jm")).content; } catch (error) { note(error.message); } }
+    $("save-help").onclick = async () => { try { await api("/api/help/jm", { method: "PUT", body: JSON.stringify({ content: $("help-text").value }) }); note("帮助文本已保存"); } catch (error) { note(error.message); } };
+    async function loadDownloadStatus() { try { const rows = await api("/api/scopes"); $("download-status").replaceChildren(); rows.forEach((scope) => { const row = document.createElement("div"); row.className = "item"; const label = document.createElement("div"); label.textContent = scope.scope_key; const controls = document.createElement("div"); controls.className = "row"; for (const [key, title] of [["chat_enabled", "聊天"], ["download_enabled", "下载"]]) { const button = document.createElement("button"); button.textContent = `${title}${scope[key] ? "：开" : "：关"}`; button.onclick = async () => { try { await api(`/api/scopes/${scope.scope_key.replace(":", "/")}/policy`, { method: "PATCH", body: JSON.stringify({ [key]: !scope[key] }) }); await loadDownloadStatus(); } catch (error) { note(error.message); } }; controls.append(button); } row.append(label, controls); $("download-status").append(row); }); if (!rows.length) $("download-status").textContent = "尚未配置会话权限"; } catch (error) { note(error.message); } }
+    $("add-download-scope").onclick = async () => { try { await api(`/api/scopes/${$("download-kind").value}/${$("download-owner").value}/policy`, { method: "PATCH", body: JSON.stringify({ chat_enabled: false, download_enabled: false }) }); await loadDownloadStatus(); note("会话已添加，当前权限关闭"); } catch (error) { note(error.message); } };
+    $("upload-stickers").onclick = async () => { const file = $("sticker-file").files[0]; if (!file) return note("先选择 ZIP 包"); try { const data = await api("/api/stickers/import", { method: "POST", headers: { "Content-Type": "application/zip" }, body: file }); $("sticker-result").textContent = `已追加 ${data.count} 张，当前最大编号 ${data.max_id}`; } catch (error) { note(error.message); } };
+    async function loadAdmins() { try { const rows = await api("/api/admins"); $("admin-list").textContent = rows.map((row) => `QQ ${row.qq_id}${row.is_super ? "（超级管理员）" : ""}${row.enabled ? "" : "（已停用）"}`).join("\n"); } catch (error) { note(error.message); } }
+    $("add-admin").onclick = async () => { try { await api("/api/admins", { method: "POST", body: JSON.stringify({ qq_id: Number($("new-admin-qq").value), password: $("new-admin-password").value }) }); $("new-admin-password").value = ""; note("管理员已添加"); await loadAdmins(); } catch (error) { note(error.message); } };
+    function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]); }
+    enterApp().catch(() => showLogin());
+  </script>
+</body>
+</html>
