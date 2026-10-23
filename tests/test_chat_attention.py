@@ -12,7 +12,7 @@ from pathlib import Path
 
 from jmbot.core.chat_service import ChatStore, GroupAction, SUPER_FACES, parse_group_action, split_chat_reply
 from jmbot.config import load_config
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Message, PokeNotifyEvent
 import jmbot.bot as bot_module
 
 
@@ -60,6 +60,17 @@ class AttentionStoreTest(unittest.TestCase):
     def test_observation_config_rejects_reversed_interval(self):
         with self.assertRaises(ValueError):
             load_config({'JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS': '300', 'JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS': '120'})
+
+    def test_poke_rule_only_matches_pokes_targeting_the_bot(self):
+        def poke(target_id, user_id=42):
+            return PokeNotifyEvent(
+                time=0, self_id=99, post_type='notice', notice_type='notify',
+                sub_type='poke', user_id=user_id, group_id=1, target_id=target_id,
+            )
+
+        self.assertTrue(asyncio.run(bot_module._is_group_poke(poke(99))))
+        self.assertFalse(asyncio.run(bot_module._is_group_poke(poke(43))))
+        self.assertFalse(asyncio.run(bot_module._is_group_poke(poke(99, user_id=99))))
 
     def test_persona_uses_the_same_super_face_whitelist(self):
         import re
@@ -176,6 +187,28 @@ class AttentionBotTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, 'request_chat_completion', side_effect=request):
             await bot_module._observe_group(self.bot, 1)
         self.bot.call_api.assert_not_awaited()
+
+    async def test_observation_skips_group_already_in_active_window(self):
+        self.store.append_group_message(1, '甲', 'hi', user_id=42, message_id=101)
+        self.store.set_group_active_until(1, time.time() + 100)
+        with patch.object(bot_module, 'request_chat_completion') as request:
+            await bot_module._observe_group(self.bot, 1)
+        request.assert_not_called()
+        self.bot.call_api.assert_not_awaited()
+
+    async def test_poke_wakes_group_and_opens_active_window(self):
+        event = SimpleNamespace(group_id=1, user_id=42)
+        with patch.object(bot_module, '_group_member_name', AsyncMock(return_value='甲')), patch.object(
+            bot_module, 'request_chat_completion', return_value='{"reply":"戳我干嘛"}'
+        ) as request:
+            await bot_module._handle_group_poke(self.bot, event)
+            await bot_module._handle_group_poke(self.bot, event)
+        request.assert_called_once()
+        self.assertTrue(self.store.is_group_active(1))
+        self.bot.call_api.assert_awaited_once()
+        history = self.store.group_history(1)
+        self.assertEqual(history[0].content, '（戳了戳你）')
+        self.assertEqual(history[-1].role, 'assistant')
 
     async def test_disconnect_cancels_worker_without_duplicate_tasks(self):
         bot_module._ensure_attention_worker(self.bot)

@@ -233,8 +233,8 @@ JM_BOT_GROUP_CHAT_CONTEXT_SECONDS=600
 JM_BOT_GROUP_CHAT_ACTIVE_SECONDS=180
 JM_BOT_GROUP_CHAT_FOLLOWUP_COOLDOWN_SECONDS=3
 JM_BOT_GROUP_CHAT_OBSERVE_ENABLED=true
-JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS=7200
-JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS=7200
+JM_BOT_GROUP_CHAT_OBSERVE_MIN_SECONDS=60
+JM_BOT_GROUP_CHAT_OBSERVE_MAX_SECONDS=60
 JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS=45
 JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT=3
 JM_BOT_CHAT_REPLY_MAX_LENGTH=500
@@ -243,13 +243,13 @@ JM_BOT_CHAT_ALIASES=大肥鱼,大肥鱼喵,吃白饭大肥鱼,JM大使
 
 `JM_BOT_QUEUE_DB` 是持久化任务队列数据库路径。`JM_BOT_USER_DB` 保存用户收藏记录。`JM_BOT_HISTORY_RETENTION_DAYS` 控制已完成、失败、取消任务的保留天数，默认 7 天；`JM_BOT_HISTORY_MAX_PER_USER` 控制每个用户最多保留多少条历史记录，默认 50 条。`JM_BOT_DOWNLOAD_IMAGE_THREADS` 和 `JM_BOT_DOWNLOAD_PHOTO_THREADS` 控制单个任务内部的 jmcomic 下载线程数。`JM_BOT_JOB_TIMEOUT_SECONDS` 控制单个漫画任务的最长运行时间，超时后会终止隔离子进程并把任务标记为失败。`JM_BOT_AUTO_SPLIT_PDF` 开启后，大本子会按 `JM_BOT_SPLIT_IMAGE_COUNT` 拆成多个 PDF 并顺序上传。详情、封面和预览同样使用隔离子进程；详情和封面使用查询超时，预览使用独立的 `JM_BOT_PREVIEW_TIMEOUT_SECONDS`。阿里云版保持单查询并发。
 
-聊天功能与下载功能并行，不需要切换模式：`/jm` 用于下载、查询和下载任务管理，`/jmg` 只用于下载管理员操作，`/ds` 专用于聊天配置。`/ds 帮助` 按 `私聊｜群聊｜管理` 三个主题给出分层帮助，风格与 `/jm 帮助` 一致。私聊用户先发送 `/ds 你的 API Key`，然后直接发送普通文字；`/ds 状态` 查看私聊 Key 状态，`/ds 清除` 删除 Key，`/ds 清空` 清除私聊历史。管理员 QQ `3065532050` 通过私聊配置群聊 Key：`/ds 群聊key 群号 API_KEY`，也可以使用 `查看` 和 `清除`；使用 `/ds 停止|开启|状态` 管理聊天总开关。聊天关闭时下载功能继续运行。角色名为“大肥鱼”，群聊支持真实 QQ `@`、群名片和 `JM_BOT_CHAT_ALIASES` 中的别名。真实 `@` 一定回复；普通接话由短期注意力窗口和话题相关性共同决定，随机观察另有频率限制。支持文字、图片表情包、非黄脸超级表情、消息表情回应及戳一戳；禁止颜文字、Unicode emoji 和模型直接输出 CQ 码。当前模型配置为 `deepseek-flash`，并关闭 thinking。API Key 使用 `JM_BOT_CHAT_MASTER_KEY_PATH` 指向的 Fernet 主密钥加密后存储。
+聊天功能与下载功能并行，不需要切换模式：`/jm` 用于下载、查询和下载任务管理，`/jmg` 只用于下载管理员操作，`/ds` 专用于聊天配置。`/ds 帮助` 按 `私聊｜群聊｜管理` 三个主题给出分层帮助，风格与 `/jm 帮助` 一致。私聊用户先发送 `/ds 你的 API Key`，然后直接发送普通文字；`/ds 状态` 查看私聊 Key 状态，`/ds 清除` 删除 Key，`/ds 清空` 清除私聊历史。管理员 QQ `3065532050` 通过私聊配置群聊 Key：`/ds 群聊key 群号 API_KEY`，也可以使用 `查看` 和 `清除`；使用 `/ds 停止|开启|状态` 管理聊天总开关。聊天关闭时下载功能继续运行。角色名为“大肥鱼”，群聊支持真实 QQ `@`、群名片、`JM_BOT_CHAT_ALIASES` 中的别名和被戳一戳唤醒。真实 `@` 一定回复；普通接话由短期注意力窗口和话题相关性共同决定，每分钟观察另有频率限制。支持文字、图片表情包、非黄脸超级表情、消息表情回应及戳一戳；禁止颜文字、Unicode emoji 和模型直接输出 CQ 码。当前模型配置为 `deepseek-flash`，并关闭 thinking。API Key 使用 `JM_BOT_CHAT_MASTER_KEY_PATH` 指向的 Fernet 主密钥加密后存储。
 
 群聊诊断日志写入 systemd journal，不包含聊天正文或 API Key。出现无响应时，在服务器执行 `sudo journalctl -u jmbot -f`，然后重新 @ 机器人；重点查找 `收到群聊含 @`、`群聊跳过`、`群聊请求 DeepSeek`、`DeepSeek 请求失败` 或 `群聊互动完成`。日志包含 @ 段目标 QQ，可确认群昵称 @ 是否解析到了机器人账号。如果没有任何相关行，检查 `systemctl status jmbot`、OneBot 连接和群白名单 `JM_BOT_ALLOWED_GROUPS`。
 
-群聊上下文由 `JM_BOT_GROUP_CHAT_HISTORY_LIMIT` 和 `JM_BOT_GROUP_CHAT_CONTEXT_SECONDS` 限制，默认最多 12 条且只取最近 600 秒。真实 @、引用机器人或提及机器人名字会唤醒并引用触发消息回复；成功互动后进入默认 180 秒的接话窗口，由模型判断新消息是否在接话或值得参与，后续不再自动引用。接话默认间隔至少 3 秒，合并期间被新消息覆盖的候选；它不占随机主动互动的次数。成员之间互相 @ 或引用时，机器人没有被直接叫到就不会抢答。
+群聊上下文由 `JM_BOT_GROUP_CHAT_HISTORY_LIMIT` 和 `JM_BOT_GROUP_CHAT_CONTEXT_SECONDS` 限制，默认最多 12 条且只取最近 600 秒。真实 @、引用机器人和提及“大肥鱼”等别名会唤醒并引用触发消息回复，被戳一戳会唤醒并即时回应；成功互动后进入默认 180 秒的接话窗口，由模型判断新消息是否在接话或值得参与，后续不再自动引用。接话默认间隔至少 3 秒，合并期间被新消息覆盖的候选；它不占随机主动互动的次数。成员之间互相 @ 或引用时，机器人没有被直接叫到就不会抢答。
 
-默认每 2 小时（7200 秒）观察一次近期聊天，可选择简短发言、只回应消息表情、戳当前发言者或沉默。观察间隔的最小值和最大值默认均为 7200 秒，可配置为随机范围。只检查本次连接已收到消息的群，只看最近 180 秒内的有限条记录，没有新消息就不重复判断；这是 OneBot 接收到的群消息，不是读取 QQ 客户端当前页面。观察遵守群白名单、聊天总开关、群 Key 与余额状态。`JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS` 和 `JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT` 只约束随机主动互动（默认间隔至少 45 秒、10 分钟最多 3 次）；@ 唤醒不受这些限额影响。
+默认每分钟（60 秒）检查一次近期聊天，有新消息时才调用模型判断是否加入；决定加入后同样进入接话窗口。观察间隔的最小值和最大值默认均为 60 秒，可配置为随机范围。只检查本次连接已收到消息的群，只看最近 180 秒内的有限条记录，没有新消息就不重复判断；活跃期内由接话逻辑逐条处理，观察任务不再重复请求模型。这是 OneBot 接收到的群消息，不是读取 QQ 客户端当前页面。观察遵守群白名单、聊天总开关、群 Key 与余额状态。`JM_BOT_GROUP_CHAT_REPLY_COOLDOWN_SECONDS` 和 `JM_BOT_GROUP_CHAT_PROACTIVE_LIMIT` 只约束随机主动互动（默认间隔至少 45 秒、10 分钟最多 3 次）；@、别名和戳一戳唤醒不受这些限额影响，戳一戳另有 45 秒回复冷却。
 
 图片表情包保存在 `data/stickers/`，`manifest.json` 记录 88 张图的稳定编号、主人审核后的中文解释，以及据此定义的使用场景。群聊、私聊都把目录交给模型，模型用 `[sticker:131]` 这样的标记选择图片；发送层只接受目录中存在的本地素材，以图片数据发送，聊天历史只记编号。可以频繁用图，也可以单独用一张图回复，不要求每句话附图，不连续堆图；一次回复最多一张，通常与超级表情择一使用。调侃图仅用于轻松熟人互动，安慰场景选择安慰图；无聊骚扰类图不会额外触发主动发言或刷屏。素材和说明随 Git 一起部署，更新后重启 bot 加载；原始素材目录后续改名或删除不会自动同步到仓库。
 

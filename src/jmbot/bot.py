@@ -7,9 +7,17 @@ import shutil
 import tempfile
 from pathlib import Path
 import nonebot
-from nonebot import get_driver, logger, on_message
+from nonebot import get_driver, logger, on_message, on_notice
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageEvent, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import (
+    Bot,
+    GroupMessageEvent,
+    Message,
+    MessageEvent,
+    NoticeEvent,
+    PokeNotifyEvent,
+    PrivateMessageEvent,
+)
 from nonebot.rule import Rule
 
 from jmbot.core.catalog_service import RankingQuery
@@ -305,6 +313,30 @@ async def handle_chat_message(bot: Bot, event: MessageEvent) -> None:
         await _handle_group_chat(bot, event)
     elif isinstance(event, PrivateMessageEvent) and is_friend_private_message(event):
         await _handle_private_chat(bot, event)
+
+
+async def _is_group_poke(event: NoticeEvent) -> bool:
+    """True when a group member pokes this bot (not another member)."""
+
+    return (
+        isinstance(event, PokeNotifyEvent)
+        and event.group_id is not None
+        and int(event.target_id) == int(event.self_id)
+        and int(event.user_id) != int(event.self_id)
+    )
+
+
+poke_matcher = on_notice(rule=Rule(_is_group_poke), priority=30, block=False)
+
+
+@poke_matcher.handle()
+async def handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
+    group_id = int(event.group_id)
+    if CONFIG.allowed_group_ids and group_id not in CONFIG.allowed_group_ids:
+        return
+    if not CHAT_STORE.is_chat_enabled():
+        return
+    await _handle_group_poke(bot, event)
 
 
 @jm_matcher.handle()
@@ -798,6 +830,104 @@ async def _handle_group_chat(bot: Bot, event: GroupMessageEvent) -> None:
         )
 
 
+async def _group_member_name(bot: Bot, group_id: int, user_id: int) -> str:
+    try:
+        result = await bot.call_api("get_group_member_info", group_id=group_id, user_id=user_id)
+    except Exception as error:
+        LOGGER.warning(
+            "获取群成员昵称失败 group_id={} user_id={} error_type={}",
+            group_id, user_id, type(error).__name__,
+        )
+        return str(user_id)
+    if isinstance(result, dict):
+        name = str(result.get("card") or result.get("nickname") or "").strip()
+        if name:
+            return name
+    return str(user_id)
+
+
+async def _handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
+    """A poke at the bot wakes it and opens the active window immediately."""
+
+    group_id = int(event.group_id)
+    user_id = int(event.user_id)
+    if str(user_id) == str(bot.self_id):
+        return
+    api_key = CHAT_STORE.get_group_key(group_id)
+    if not api_key:
+        LOGGER.info("群聊戳一戳忽略：未配置群 Key group_id={}", group_id)
+        return
+    if CHAT_STORE.is_group_balance_exhausted(group_id):
+        LOGGER.info("群聊戳一戳忽略：API 余额标记不足 group_id={}", group_id)
+        return
+
+    # 被戳一戳属于三种主动唤醒之一：即使模型请求失败也先打开活跃期。
+    CHAT_STORE.set_group_active_until(group_id, time.time() + CONFIG.group_chat_active_seconds)
+    LOGGER.info("群聊戳一戳唤醒 group_id={} user_id={}", group_id, user_id)
+
+    lock = _lock_for(_group_chat_locks, group_id)
+    async with lock:
+        if (
+            not CHAT_STORE.is_chat_enabled()
+            or CHAT_STORE.get_group_key(group_id) != api_key
+            or CHAT_STORE.is_group_balance_exhausted(group_id)
+        ):
+            return
+        if time.time() - _group_chat_last_reply.get(group_id, 0.0) < CONFIG.group_chat_reply_cooldown_seconds:
+            LOGGER.info("群聊戳一戳冷却中 group_id={} user_id={}", group_id, user_id)
+            return
+        sender_name = await _group_member_name(bot, group_id, user_id)
+        current_message_id = CHAT_STORE.append_group_message(
+            group_id, sender_name, "（戳了戳你）", user_id=user_id,
+        )
+        history = CHAT_STORE.group_history(
+            group_id,
+            limit=CONFIG.group_chat_history_limit,
+            max_age_seconds=CONFIG.group_chat_context_seconds,
+            up_to_id=current_message_id,
+        )
+        messages = build_group_messages(
+            CHAT_ROLE,
+            history,
+            sender_name,
+            f"（{sender_name} 戳了戳你）",
+            decision_required=False,
+            attention_mode="direct",
+        )
+        try:
+            raw_reply = await asyncio.to_thread(
+                request_chat_completion,
+                api_key,
+                messages,
+                endpoint=CONFIG.chat_endpoint,
+                model=CONFIG.chat_model,
+                timeout_seconds=CONFIG.chat_timeout_seconds,
+                proxy=CONFIG.chat_proxy,
+                json_output=True,
+            )
+        except ChatAPIError as error:
+            _attention_examined[(str(bot.self_id), group_id)] = current_message_id
+            LOGGER.error(
+                "群聊戳一戳 DeepSeek 请求失败 group_id={} status_code={} error_type={}",
+                group_id, error.status_code, type(error).__name__,
+            )
+            if error.status_code == 402 and CHAT_STORE.get_group_key(group_id) == api_key:
+                CHAT_STORE.mark_group_balance_exhausted(group_id, str(error))
+            return
+
+        if not CHAT_STORE.is_chat_enabled() or CHAT_STORE.get_group_key(group_id) != api_key:
+            return
+        _attention_examined[(str(bot.self_id), group_id)] = current_message_id
+        delivered = await _deliver_group_action(
+            bot, group_id, parse_group_action(raw_reply, direct=True), history,
+            current_user_id=user_id,
+        )
+        LOGGER.info(
+            "群聊戳一戳互动完成 group_id={} user_id={} delivered={}",
+            group_id, user_id, delivered,
+        )
+
+
 async def _compact_private_history(user_id: int, api_key: str) -> None:
     history = CHAT_STORE.private_history(user_id, limit=60)
     if len(history) <= 30:
@@ -951,6 +1081,9 @@ async def _observe_group(bot: Bot, group_id: int) -> None:
     if lock.locked():
         return
     async with lock:
+        # 活跃期内的普通消息已由接话逻辑逐条判断，观察任务不再重复请求模型。
+        if CHAT_STORE.is_group_active(group_id):
+            return
         if CHAT_STORE.is_group_balance_exhausted(group_id) or not _group_reply_allowed(group_id):
             return
         api_key = CHAT_STORE.get_group_key(group_id)

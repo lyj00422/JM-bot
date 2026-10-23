@@ -621,7 +621,7 @@ def build_group_messages(
     if attention_mode == "continuation":
         system += " 当前处于短期接话窗口：判断最新消息是否在接你的话、指向你，或确实适合你参与；无关就沉默，不能因为醒着就每条都答。"
     elif attention_mode == "observe":
-        system += " 这是随机观察：只在最新话题有适合补充的内容或互动时加入，可以只回应表情；没有合适话就沉默，不要重新聊旧消息。"
+        system += " 这是每分钟观察：只在最新话题有适合补充的内容或互动时加入，可以只回应表情；没有合适话就沉默，不要重新聊旧消息。"
     messages = [{"role": "system", "content": system}]
     for item in history:
         sender = item.sender_name or "群成员"
