@@ -42,7 +42,7 @@ from jmbot.core.chat_service import (
     request_chat_completion,
     split_chat_reply,
 )
-from jmbot.config import load_config
+from jmbot.config import load_config, service_heartbeat_name
 from jmbot.admin_app import AdminStore
 from jmbot.core.conversation_state import ConversationStateStore, Scope
 from jmbot.core.fair_scheduler import FairChatScheduler
@@ -130,6 +130,7 @@ ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 USER_STORE = UserDataStore(CONFIG.user_db_path)
 CHAT_STORE = ChatStore(CONFIG.chat_db_path, master_key_path=CONFIG.chat_master_key_path)
 ADMIN_STORE = AdminStore(CONFIG.admin_db_path)
+SERVICE_HEARTBEAT_NAME = service_heartbeat_name(CONFIG.service_role)
 CONVERSATION_STORE = ConversationStateStore(CONFIG.conversation_db_path)
 for _legacy_group_id in CHAT_STORE.known_group_ids() | CONFIG.allowed_group_ids:
     if not CONVERSATION_STORE.has_policy(Scope("group", _legacy_group_id)):
@@ -273,18 +274,20 @@ _install_chat_secret_log_redaction()
 
 @DRIVER.on_bot_connect
 async def _start_queue_worker_on_connect(bot: Bot) -> None:
-    ADMIN_STORE.heartbeat("nonebot", True, f"QQ {bot.self_id} connected")
+    ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
     _ensure_heartbeat_worker(bot)
-    await _ensure_queue_worker(bot)
-    await CHAT_SCHEDULER.start()
-    _ensure_approval_worker(bot)
-    _ensure_control_worker(bot)
-    _ensure_attention_worker(bot)
+    if CONFIG.service_role in {"all", "download"}:
+        await _ensure_queue_worker(bot)
+        _ensure_approval_worker(bot)
+        _ensure_control_worker(bot)
+    if CONFIG.service_role in {"all", "chat"} and CONFIG.chat_backend == "nonebot":
+        await CHAT_SCHEDULER.start()
+        _ensure_attention_worker(bot)
 
 
 @DRIVER.on_bot_disconnect
 async def _stop_attention_on_disconnect(bot: Bot) -> None:
-    ADMIN_STORE.heartbeat("nonebot", False, "NapCat connection disconnected")
+    ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
     heartbeat = _heartbeat_tasks.pop(str(bot.self_id), None)
     if heartbeat:
         heartbeat.cancel()
@@ -602,6 +605,8 @@ request_matcher = on_request(priority=5, block=False)
 
 @request_matcher.handle()
 async def capture_approval_request(event: FriendRequestEvent | GroupRequestEvent) -> None:
+    if CONFIG.service_role == "chat":
+        return
     if isinstance(event, FriendRequestEvent):
         ADMIN_STORE.upsert_approval(
             "friend", str(event.user_id), "pending",
@@ -633,14 +638,16 @@ def _ensure_heartbeat_worker(bot: Bot) -> None:
 async def _heartbeat_worker(bot: Bot) -> None:
     try:
         while True:
-            ADMIN_STORE.heartbeat("nonebot", True, f"QQ {bot.self_id} connected")
+            ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
             await asyncio.sleep(15)
     except asyncio.CancelledError:
-        ADMIN_STORE.heartbeat("nonebot", False, "NapCat connection disconnected")
+        ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
         raise
 
 
 def _ensure_approval_worker(bot: Bot) -> None:
+    if CONFIG.service_role == "chat":
+        return
     bot_id = str(bot.self_id)
     task = _approval_tasks.get(bot_id)
     if task is None or task.done():
@@ -1435,7 +1442,7 @@ def _record_group_proactive_reply(group_id: int) -> None:
 
 
 def _ensure_attention_worker(bot: Bot) -> None:
-    if not CONFIG.group_chat_observe_enabled:
+    if CONFIG.service_role == "download" or CONFIG.chat_backend == "maibot" or not CONFIG.group_chat_observe_enabled:
         return
     bot_id = str(bot.self_id)
     task = _attention_tasks.get(bot_id)
@@ -1721,6 +1728,9 @@ async def _upload_preview(bot: Bot, target: QueueTarget, path) -> None:
 
 async def _ensure_queue_worker(bot: Bot) -> None:
     global _queue_recovered, _queue_worker_task
+
+    if CONFIG.service_role == "chat":
+        return
 
     async with _queue_worker_lock:
         if not _queue_recovered:

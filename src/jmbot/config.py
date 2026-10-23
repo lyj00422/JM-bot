@@ -112,6 +112,18 @@ def parse_positive_int(source: Mapping[str, str], name: str, default: int) -> in
     return value
 
 
+def service_heartbeat_name(service_role: str) -> str:
+    """Return a truthful health key for this process role."""
+
+    if service_role == "all":
+        return "nonebot"
+    if service_role == "download":
+        return "nonebot-download"
+    if service_role == "chat":
+        return "nonebot-chat"
+    raise ValueError("service_role must be all, download or chat")
+
+
 def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
     """Load configuration from environment variables."""
 

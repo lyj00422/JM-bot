@@ -1,10 +1,19 @@
 import unittest
 from pathlib import Path
 
-from jmbot.config import load_config, parse_int_set
+from jmbot.config import load_config, parse_int_set, service_heartbeat_name
 
 
 class ConfigTest(unittest.TestCase):
+    def test_service_heartbeat_names_reflect_process_role(self):
+        self.assertEqual(service_heartbeat_name("all"), "nonebot")
+        self.assertEqual(service_heartbeat_name("download"), "nonebot-download")
+        self.assertEqual(service_heartbeat_name("chat"), "nonebot-chat")
+
+    def test_service_heartbeat_rejects_unknown_role(self):
+        with self.assertRaises(ValueError):
+            service_heartbeat_name("unknown")
+
     def test_parse_int_set_ignores_empty_parts(self):
         self.assertEqual(parse_int_set("123, 456,,789"), {123, 456, 789})
 

@@ -17,12 +17,16 @@
 
 ## 尚未允许生产切换的部分
 
-MaiBot 本体和适配器没有被复制进这个下载仓库。MaiBot 的固定调研提交为 `c602a2780f4f4dda4a6be46d67abc1cfb1ad420c`，但线上 NapCat 当前只有一个反向 WebSocket 消费者。仍需在隔离端到端环境验证：
+MaiBot 本体和适配器没有被复制进这个下载仓库。P0 官方源码核验已完成：MaiBot 固定提交为 `c602a2780f4f4dda4a6be46d67abc1cfb1ad420c`，官方统一 QQ 连接器固定提交为 `54fcc7fcc4072983a1283d99fa0edd559125e1d7`（1.1.8）。官方文档要求 MaiBot 1.3.0 使用该连接器，通过 NapCat 正向 WebSocket 连接；连接器策略默认放行全部消息。MaiBot 的 RouteKey 纳入 platform、account_id、scope，消息路由键还需结合群号或私聊用户号形成会话 ID。NapCat 支持多个 WebSocket 连接，但会向每个连接广播事件，因此直接并联会重复消费 `/jm` 等命令；`connection_id` 只用于路由隔离，不是事件过滤。
+
+线上 NapCat 当前配置仍是一个反向 WebSocket 消费者，尚无 MaiBot 正向 WebSocket 接入和早期路由过滤。适配器自带正则过滤发生在消息构造之后，不满足密钥命令在媒体解析前拦截的要求。当前服务器总内存约 1.6 GiB、可用约 785 MiB、没有 swap；MaiBot 与现有服务的实际峰值内存尚未测量。仍需在隔离端到端环境验证：
 
 1. MaiBot OneBot adapter 的连接、事件过滤、媒体 codec、@/引用/戳一戳行为。
 2. 两个进程是否能共享 NapCat，或必须增加一个只做 ingress 路由的本机桥接层。
 3. MaiBot 原生记忆/profile/emoji 的 scope 是否覆盖群、私聊和成员印象；不满足时只补最小扩展。
 4. 热点群回放、模型超时、事件循环延迟和服务器内存上限。
+
+分角色代码继续保持默认兼容行为；chat 角色不会再重复接收审批写入。该改动不启动 MaiBot，也不代表生产聊天已经迁移。
 
 在这些实验通过前，服务器继续使用 `JM_BOT_SERVICE_ROLE=all`、`JM_BOT_CHAT_BACKEND=nonebot`。切换 MaiBot 时必须先停止旧聊天发送者、备份 SQLite/WAL 和 master key、完成 dry-run 对账，再把 `JM_BOT_CHAT_BACKEND=maibot` 作为唯一聊天 sender 启动；下载服务可单独保留。
 
