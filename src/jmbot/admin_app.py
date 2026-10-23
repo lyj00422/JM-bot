@@ -13,6 +13,7 @@ import json
 import secrets
 import sqlite3
 import time
+import asyncio
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -27,7 +28,10 @@ from jmbot.core.sticker_import import StickerImportError, StickerImporter
 
 
 SUPER_ADMIN_ID = 3065532050
-ALLOWED_PROVIDERS = {"ds_school", "ds_official", "glm_official", "kimi_official", "qwen_official"}
+ALLOWED_PROVIDERS = {
+    "ds_school", "ds_official", "glm_school", "glm_official",
+    "kimi_school", "kimi_official", "qwen_school", "qwen_official",
+}
 
 
 class AdminStore:
@@ -86,6 +90,11 @@ class AdminStore:
                 );
                 CREATE TABLE IF NOT EXISTS help_text (
                     key TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS control_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending',
+                    result TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
                 );
                 """
             )
@@ -289,6 +298,50 @@ class AdminStore:
             row = conn.execute("SELECT content FROM help_text WHERE key='jm'").fetchone()
         return str(row[0]) if row else "发送 /jm help 查看下载帮助。"
 
+    def queue_control_action(self, name: str, payload: dict[str, Any] | None = None) -> int:
+        if name not in {"download_cancel", "download_clear", "download_priority", "download_delete_failed"}:
+            raise ValueError("unsupported control action")
+        now = time.time()
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO control_actions(name,payload,created_at,updated_at) VALUES(?,?,?,?)",
+                (name, json.dumps(payload or {}, ensure_ascii=False), now, now),
+            )
+        return int(cursor.lastrowid)
+
+    def claim_control_actions(self, limit: int = 10) -> list[dict[str, Any]]:
+        now = time.time()
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT id,name,payload FROM control_actions "
+                "WHERE status='pending' OR (status='processing' AND updated_at<?) ORDER BY id LIMIT ?",
+                (now - 60, limit),
+            ).fetchall()
+            for row in rows:
+                conn.execute("UPDATE control_actions SET status='processing',updated_at=? WHERE id=?", (now, int(row[0])))
+        return [{"id": int(row[0]), "name": str(row[1]), "payload": json.loads(row[2])} for row in rows]
+
+    def control_actions(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT id,name,payload,status,result,error,created_at,updated_at FROM control_actions ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        values = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item["payload"])
+            item["result"] = json.loads(item["result"] or "{}")
+            values.append(item)
+        return values
+
+    def complete_control_action(self, action_id: int, *, result: dict[str, Any] | None = None, error: str | None = None) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE control_actions SET status=?,result=?,error=?,updated_at=? WHERE id=?",
+                ("failed" if error else "done", json.dumps(result or {}, ensure_ascii=False), error, time.time(), action_id),
+            )
 
 class LoginBody(BaseModel):
     qq_id: int
@@ -301,6 +354,8 @@ class PolicyBody(BaseModel):
     use_default_key: bool | None = None
     default_persona: bool | None = None
     growth_enabled: bool | None = None
+    chat_blacklisted: bool | None = None
+    download_blacklisted: bool | None = None
 
 
 class GlobalPolicyBody(BaseModel):
@@ -334,11 +389,28 @@ class CredentialBody(BaseModel):
     overwrite: bool = False
 
 
-def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, sticker_dir: str | Path, status_provider=None, chat_store=None, default_provider: str = "ds_school", fallback_default_key_configured: bool = False) -> FastAPI:
+def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, sticker_dir: str | Path, status_provider=None, chat_store=None, queue_db_path: str | Path | None = None, default_provider: str = "ds_school", fallback_default_key_configured: bool = False) -> FastAPI:
     admins = AdminStore(admin_db)
     state = ConversationStateStore(conversation_db)
     stickers = StickerImporter(sticker_dir)
     app = FastAPI(title="JMbot 管理后台", docs_url="/api/docs")
+
+    @app.on_event("startup")
+    async def start_admin_heartbeat() -> None:
+        async def heartbeat_loop() -> None:
+            while True:
+                admins.heartbeat("jmbot-admin", True, "管理后台运行中")
+                await asyncio.sleep(15)
+
+        app.state.heartbeat_task = asyncio.create_task(heartbeat_loop(), name="admin-service-heartbeat")
+
+    @app.on_event("shutdown")
+    async def stop_admin_heartbeat() -> None:
+        task = getattr(app.state, "heartbeat_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        admins.heartbeat("jmbot-admin", False, "管理后台已停止")
 
     def require_admin(request: Request) -> int:
         qq_id = admins.session_admin(request.cookies.get("jmbot_session"))
@@ -382,6 +454,57 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         value = status_provider() if status_provider else admins.service_status()
         return {"ok": True, "services": value, "super_admin": SUPER_ADMIN_ID}
 
+    @app.get("/api/download/actions")
+    async def download_actions(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
+        return admins.control_actions()
+
+    @app.get("/api/download/queue")
+    async def download_queue(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
+        if queue_db_path is None or not Path(queue_db_path).exists():
+            return []
+        uri = Path(queue_db_path).resolve().as_uri() + "?mode=ro"
+        try:
+            conn = sqlite3.connect(uri, uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    "SELECT id,album_id,destination_type,group_id,user_id,status,attempts,priority,error,created_at,updated_at,output_format,chapters,stage,progress_current,progress_total,started_at "
+                    "FROM album_queue ORDER BY id DESC LIMIT 200"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            raise HTTPException(status_code=503, detail="读取下载队列失败") from exc
+        return [dict(row) for row in rows]
+
+    @app.post("/api/download/queue/{job_id}/cancel")
+    async def cancel_download_job(job_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+        if queue_db_path is None:
+            raise HTTPException(status_code=503, detail="下载队列未连接")
+        action_id = admins.queue_control_action("download_cancel", {"job_id": job_id})
+        return {"ok": True, "pending": True, "action_id": action_id}
+
+    @app.post("/api/download/queue/clear")
+    async def clear_download_queue(_: int = Depends(require_admin)) -> dict[str, Any]:
+        if queue_db_path is None:
+            raise HTTPException(status_code=503, detail="下载队列未连接")
+        action_id = admins.queue_control_action("download_clear")
+        return {"ok": True, "pending": True, "action_id": action_id}
+
+    @app.post("/api/download/queue/{job_id}/priority")
+    async def prioritize_download_job(job_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+        if queue_db_path is None:
+            raise HTTPException(status_code=503, detail="下载队列未连接")
+        action_id = admins.queue_control_action("download_priority", {"job_id": job_id})
+        return {"ok": True, "pending": True, "action_id": action_id}
+
+    @app.delete("/api/download/queue/{job_id}/failed")
+    async def delete_failed_download(job_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+        if queue_db_path is None:
+            raise HTTPException(status_code=503, detail="下载队列未连接")
+        action_id = admins.queue_control_action("download_delete_failed", {"job_id": job_id})
+        return {"ok": True, "pending": True, "action_id": action_id}
+
     @app.get("/api/me")
     async def me(qq_id: int = Depends(require_admin)) -> dict[str, Any]:
         return {"qq_id": qq_id, "is_super": admins.is_super(qq_id)}
@@ -419,10 +542,12 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         has_keys = chat_store.has_scope_credentials(kind, owner_id)
         if not uses_default and has_keys and not body.overwrite:
             raise HTTPException(status_code=409, detail="该会话已有此服务商的 Key；确认覆盖后重试")
-        if kind == "private":
-            chat_store.set_private_credential(owner_id, provider, body.api_key)
-        else:
-            chat_store.set_group_credential(owner_id, provider, body.api_key)
+        # A scope has one active independent credential.  Replacing it through
+        # the backend must have the same semantics as the QQ command: remove
+        # stale provider entries, switch the active provider, and disable
+        # default-key inheritance atomically from the caller's perspective.
+        chat_store.replace_scope_credential(kind, owner_id, provider, body.api_key)
+        state.set_policy(Scope(kind, owner_id), use_default_key=False)
         return {"ok": True, "scope": f"{kind}:{owner_id}", "provider": provider, "uses_default": False}
 
     @app.get("/api/admins")
@@ -467,12 +592,30 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
 
     @app.get("/api/scopes/{kind}/{owner_id}")
     async def get_scope(kind: str, owner_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
-        return state.export_scope(Scope(kind, owner_id))
+        scope = Scope(kind, owner_id)
+        data = state.export_scope(scope)
+        if chat_store is not None:
+            data["policy"]["use_default_key"] = (
+                chat_store.uses_default_private_key(owner_id)
+                if kind == "private" else chat_store.uses_default_group_key(owner_id)
+            )
+        data["effective_persona"] = state.effective_persona(
+            scope, state.get_default_persona("大肥鱼", "")[1],
+        )
+        return data
 
     @app.get("/api/scopes")
     async def list_scopes(kind: str | None = None, _: int = Depends(require_admin)) -> list[dict[str, object]]:
         try:
-            return state.list_policies(kind)
+            scopes = state.list_policies(kind)
+            if chat_store is not None:
+                for row in scopes:
+                    scope_kind, owner = str(row["scope_key"]).split(":", 1)
+                    row["use_default_key"] = (
+                        chat_store.uses_default_private_key(int(owner))
+                        if scope_kind == "private" else chat_store.uses_default_group_key(int(owner))
+                    )
+            return scopes
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -484,6 +627,8 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     async def patch_global_policy(kind: str, body: GlobalPolicyBody, _: int = Depends(require_admin)) -> dict[str, bool]:
         try:
             state.set_global_enabled(kind, body.enabled)
+            if kind == "chat" and chat_store is not None:
+                chat_store.set_chat_enabled(body.enabled)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {kind: body.enabled}
@@ -508,8 +653,27 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     @app.patch("/api/scopes/{kind}/{owner_id}/policy")
     async def patch_policy(kind: str, owner_id: int, body: PolicyBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         changes = {key: value for key, value in body.dict().items() if value is not None}
+        scope = Scope(kind, owner_id)
+        current = state.get_policy(scope)
+        requested_default = changes.get("use_default_key", current.use_default_key)
+        if chat_store is not None:
+            requested_default = (
+                chat_store.uses_default_private_key(owner_id)
+                if kind == "private" else chat_store.uses_default_group_key(owner_id)
+            )
+            if "use_default_key" in changes:
+                requested_default = bool(changes["use_default_key"])
+        requested_chat = changes.get("chat_enabled", current.chat_enabled)
+        if chat_store is not None and kind == "group" and requested_chat and not requested_default:
+            if not chat_store.has_scope_credentials("group", owner_id):
+                raise HTTPException(status_code=400, detail="群聊启用聊天前必须配置独立 API Key")
         try:
-            policy = state.set_policy(Scope(kind, owner_id), **changes)
+            policy = state.set_policy(scope, **changes)
+            if chat_store is not None and "use_default_key" in changes:
+                if kind == "private":
+                    chat_store.set_private_default_inheritance(owner_id, bool(changes["use_default_key"]))
+                else:
+                    chat_store.set_group_default_inheritance(owner_id, bool(changes["use_default_key"]))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"policy": policy.__dict__}
@@ -520,7 +684,9 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             version = state.set_base_persona(Scope(kind, owner_id), body.prompt, expected_version=body.expected_version)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"version": version}
+        return {"version": version, "effective_persona": state.effective_persona(
+            Scope(kind, owner_id), state.get_default_persona("大肥鱼", "")[1],
+        )}
 
     @app.post("/api/scopes/{kind}/{owner_id}/growth")
     async def add_growth(kind: str, owner_id: int, body: GrowthBody, _: int = Depends(require_admin)) -> dict[str, Any]:
@@ -620,6 +786,7 @@ def main() -> None:
             os.environ.get("JM_BOT_CHAT_DB", "data/chat.sqlite3"),
             master_key_path=os.environ.get("JM_BOT_CHAT_MASTER_KEY_PATH", "data/chat-master.key"),
         ),
+        queue_db_path=os.environ.get("JM_BOT_QUEUE_DB", "data/queue.sqlite3"),
         default_provider=os.environ.get("JM_BOT_CHAT_DEFAULT_PROVIDER", "ds_school").strip().lower(),
         fallback_default_key_configured=bool(os.environ.get("JM_BOT_CHAT_DEFAULT_API_KEY", "").strip()),
     )

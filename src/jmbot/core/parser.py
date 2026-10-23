@@ -279,12 +279,30 @@ def parse_jm_admin_message(message: str, admin_command_prefix: str = "/jmg") -> 
     return None
 
 
+def is_removed_jm_admin_command(message: str, admin_command_prefix: str = "/jmg") -> bool:
+    """Recognize the retired QQ admin-command namespace for silent routing."""
+
+    prefix = re.escape(admin_command_prefix.strip())
+    if not prefix:
+        return False
+    return re.match(rf"^\s*{prefix}(?:\s|$)", message, re.IGNORECASE) is not None
+
+
 CHAT_PROVIDERS = {
     "/ds": "ds_official",
     "/glm": "glm_official",
     "/kimi": "kimi_official",
     "/qwen": "qwen_official",
 }
+
+_PROVIDER_SOURCES = {
+    "ds_official": {"学校": "ds_school", "官方": "ds_official"},
+    "glm_official": {"学校": "glm_school"},
+    "kimi_official": {"学校": "kimi_school"},
+    "qwen_official": {"学校": "qwen_school"},
+}
+
+_SCHOOL_PROVIDERS = {"ds_school", "glm_school", "kimi_school", "qwen_school"}
 
 
 def parse_chat_config_message(message: str) -> JmMessage | None:
@@ -320,7 +338,23 @@ def _parse_chat_provider_message(message: str, command_prefix: str, provider: st
     if key_match is None:
         return None
     value = (key_match.group(1) or "").strip()
+    if provider in _SCHOOL_PROVIDERS:
+        return None
+
+    # Resolve the optional source before interpreting control words.  Otherwise
+    # ``/ds 学校 确认`` (the confirmation emitted for an independent school key)
+    # is treated as a literal private key because the source prefix is still part
+    # of ``lowered``.
+    source_match = re.fullmatch(r"(学校|官方)\s+(.+)", value, re.IGNORECASE)
+    if source_match is not None:
+        source, source_value = source_match.groups()
+        source_provider = _PROVIDER_SOURCES.get(provider, {}).get(source)
+        if source_provider is None:
+            return None
+        provider = source_provider
+        value = source_value.strip()
     lowered = value.casefold()
+
     help_match = re.fullmatch(r"(?:帮助|help)(?:\s+(.*))?", value, re.IGNORECASE)
     if help_match is not None:
         return JmMessage(action="chat_help", help_topic=(help_match.group(1) or "").strip() or None, provider=provider)
@@ -341,17 +375,9 @@ def _parse_chat_provider_message(message: str, command_prefix: str, provider: st
     if lowered in {"取消", "cancel"}:
         return JmMessage(action="chat_key_cancel", provider=provider)
 
-    # New syntax: /ds 学校 KEY, /ds 官方 KEY and /ds GROUP\\KEY.
+    # New syntax: /ds 学校 KEY, /glm 学校 KEY and /ds GROUP\\KEY.
     # The backslash is the only unambiguous delimiter for administrator group
     # updates because provider keys may contain spaces or punctuation.
-    source_match = re.fullmatch(r"(学校|官方)\s+(.+)", value, re.IGNORECASE)
-    if source_match is not None:
-        source, source_value = source_match.groups()
-        if provider == "ds_official":
-            provider = "ds_school" if source.casefold() == "学校" else "ds_official"
-        else:
-            return None
-        value = source_value.strip()
     group_delimiter_match = re.fullmatch(r"([0-9]+)\\(.+)", value, re.DOTALL)
     if group_delimiter_match is not None:
         group_id = int(group_delimiter_match.group(1))

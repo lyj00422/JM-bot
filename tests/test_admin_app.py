@@ -35,6 +35,7 @@ class AdminAppTest(unittest.TestCase):
         state = self.app.routes
         self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/policy" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/persona/default" for route in state))
+        self.assertTrue(any(getattr(route, "path", "") == "/api/download/queue/{job_id}/failed" for route in state))
 
     def test_credentials_never_return_secret(self):
         self.assertTrue(self.chat.get_default_credential("ds_school"))
@@ -46,6 +47,18 @@ class AdminAppTest(unittest.TestCase):
         self.assertTrue(self.admins.is_admin(42))
         with self.assertRaisesRegex(ValueError, "不能删除"):
             self.admins.remove_admin(SUPER_ADMIN_ID)
+
+    def test_download_control_actions_are_claimed_and_completed(self):
+        action_id = self.admins.queue_control_action("download_delete_failed", {"job_id": 7})
+        claimed = self.admins.claim_control_actions()
+        self.assertEqual([(item["id"], item["name"], item["payload"]) for item in claimed], [(action_id, "download_delete_failed", {"job_id": 7})])
+        self.admins.complete_control_action(action_id, result={"job_id": 7, "deleted": True})
+        action = self.admins.control_actions(1)[0]
+        self.assertEqual((action["status"], action["result"], action["error"]), ("done", {"job_id": 7, "deleted": True}, None))
+
+    def test_admin_heartbeat_is_recorded(self):
+        self.admins.heartbeat("jmbot-admin", True, "test")
+        self.assertTrue(self.admins.service_status()["jmbot-admin"]["healthy"])
 
 
 if __name__ == "__main__":

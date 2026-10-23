@@ -173,6 +173,18 @@ class PersistentAlbumQueueTest(unittest.TestCase):
         self.assertEqual(rows[0].error, "canceled by admin")
         self.assertEqual(rows[1].error, "cleared by admin")
 
+    def test_admin_failed_record_delete_does_not_delete_active_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")
+            failed = queue.enqueue_private("111111", user_id=42)
+            active = queue.enqueue_private("222222", user_id=43)
+            queue.mark_failed(failed.id, "failed")
+
+            self.assertFalse(queue.delete_failed_job(active.id))
+            self.assertTrue(queue.delete_failed_job(failed.id))
+            self.assertIsNone(queue.get_job(failed.id))
+            self.assertEqual(queue.get_job(active.id).status, "pending")
+
     def test_admin_jump_moves_job_to_front(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue = PersistentAlbumQueue(Path(tmp) / "queue.sqlite3")

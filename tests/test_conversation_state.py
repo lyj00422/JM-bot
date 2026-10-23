@@ -63,6 +63,22 @@ class ConversationStateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             Scope("download", 42)
 
+    def test_chat_and_download_blacklists_are_independent(self):
+        scope = Scope("group", 10001)
+        policy = self.store.set_policy(
+            scope,
+            chat_enabled=True,
+            download_enabled=True,
+            chat_blacklisted=True,
+        )
+        self.assertTrue(policy.chat_blacklisted)
+        self.assertFalse(policy.download_blacklisted)
+        self.assertTrue(self.store.get_policy(scope).download_enabled)
+        self.store.set_policy(scope, download_blacklisted=True)
+        policy = self.store.get_policy(scope)
+        self.assertTrue(policy.chat_blacklisted)
+        self.assertTrue(policy.download_blacklisted)
+
 
 if __name__ == "__main__":
     unittest.main()

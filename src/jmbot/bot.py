@@ -97,7 +97,7 @@ from jmbot.core.parser import (
     JmMessage,
     parse_chat_config_message,
     is_chat_credential_message,
-    parse_jm_admin_message,
+    is_removed_jm_admin_command,
     parse_jm_message,
 )
 from jmbot.core.persistent_queue import AlbumQueueJob, PersistentAlbumQueue
@@ -195,8 +195,11 @@ def _chat_endpoint(provider: str) -> str:
     env_name = {
         "ds_school": "JM_BOT_CHAT_SCHOOL_ENDPOINT",
         "ds_official": "JM_BOT_CHAT_DS_ENDPOINT",
+        "glm_school": "JM_BOT_CHAT_SCHOOL_ENDPOINT",
         "glm_official": "JM_BOT_CHAT_GLM_ENDPOINT",
+        "kimi_school": "JM_BOT_CHAT_SCHOOL_ENDPOINT",
         "kimi_official": "JM_BOT_CHAT_KIMI_ENDPOINT",
+        "qwen_school": "JM_BOT_CHAT_SCHOOL_ENDPOINT",
         "qwen_official": "JM_BOT_CHAT_QWEN_ENDPOINT",
     }.get(provider)
     configured = os.environ.get(env_name, "").strip() if env_name else ""
@@ -206,15 +209,18 @@ def _chat_endpoint(provider: str) -> str:
         "kimi_official": "https://api.moonshot.cn/v1/chat/completions",
         "qwen_official": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     }
-    return configured or (CONFIG.chat_endpoint if provider == "ds_school" else defaults.get(provider, CONFIG.chat_endpoint))
+    return configured or (CONFIG.chat_endpoint if provider.endswith("_school") else defaults.get(provider, CONFIG.chat_endpoint))
 
 
 def _chat_model(provider: str) -> str:
     env_name = {
         "ds_school": "JM_BOT_CHAT_SCHOOL_MODEL",
         "ds_official": "JM_BOT_CHAT_DS_MODEL",
+        "glm_school": "JM_BOT_CHAT_SCHOOL_MODEL",
         "glm_official": "JM_BOT_CHAT_GLM_MODEL",
+        "kimi_school": "JM_BOT_CHAT_SCHOOL_MODEL",
         "kimi_official": "JM_BOT_CHAT_KIMI_MODEL",
+        "qwen_school": "JM_BOT_CHAT_SCHOOL_MODEL",
         "qwen_official": "JM_BOT_CHAT_QWEN_MODEL",
     }.get(provider)
     configured = os.environ.get(env_name, "").strip() if env_name else ""
@@ -224,7 +230,7 @@ def _chat_model(provider: str) -> str:
         "kimi_official": "moonshot-v1-8k",
         "qwen_official": "qwen-turbo",
     }
-    return configured or (CONFIG.chat_model if provider == "ds_school" else defaults.get(provider, CONFIG.chat_model))
+    return configured or (CONFIG.chat_model if provider.endswith("_school") else defaults.get(provider, CONFIG.chat_model))
 
 
 def _provider_command(provider: str, argument: str) -> str:
@@ -232,7 +238,9 @@ def _provider_command(provider: str, argument: str) -> str:
         return f"/ds 学校 {argument}"
     if provider == "ds_official":
         return f"/ds 官方 {argument}"
-    return f"/{provider.split('_', 1)[0]} {argument}"
+    command = provider.split("_", 1)[0]
+    source = " 学校" if provider.endswith("_school") else ""
+    return f"/{command}{source} {argument}"
 
 nonebot.init(
     driver="~fastapi+~websockets",
@@ -266,19 +274,29 @@ _install_chat_secret_log_redaction()
 @DRIVER.on_bot_connect
 async def _start_queue_worker_on_connect(bot: Bot) -> None:
     ADMIN_STORE.heartbeat("nonebot", True, f"QQ {bot.self_id} connected")
+    _ensure_heartbeat_worker(bot)
     await _ensure_queue_worker(bot)
     await CHAT_SCHEDULER.start()
     _ensure_approval_worker(bot)
+    _ensure_control_worker(bot)
     _ensure_attention_worker(bot)
 
 
 @DRIVER.on_bot_disconnect
 async def _stop_attention_on_disconnect(bot: Bot) -> None:
     ADMIN_STORE.heartbeat("nonebot", False, "NapCat connection disconnected")
+    heartbeat = _heartbeat_tasks.pop(str(bot.self_id), None)
+    if heartbeat:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
     task = _attention_tasks.pop(str(bot.self_id), None)
     if task:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+    control = _control_tasks.pop(str(bot.self_id), None)
+    if control:
+        control.cancel()
+        await asyncio.gather(control, return_exceptions=True)
 
 
 @DRIVER.on_shutdown
@@ -294,6 +312,16 @@ async def _stop_attention_on_shutdown() -> None:
     for task in approval_tasks:
         task.cancel()
     await asyncio.gather(*approval_tasks, return_exceptions=True)
+    control_tasks = list(_control_tasks.values())
+    _control_tasks.clear()
+    for task in control_tasks:
+        task.cancel()
+    await asyncio.gather(*control_tasks, return_exceptions=True)
+    heartbeat_tasks = list(_heartbeat_tasks.values())
+    _heartbeat_tasks.clear()
+    for task in heartbeat_tasks:
+        task.cancel()
+    await asyncio.gather(*heartbeat_tasks, return_exceptions=True)
 
 
 async def _is_jm_command(event: MessageEvent) -> bool:
@@ -309,7 +337,6 @@ async def _is_jm_command(event: MessageEvent) -> bool:
             CONFIG.command_prefix,
             default_format=CONFIG.default_format,
         )
-        or (CONFIG.legacy_admin_commands and parse_jm_admin_message(plaintext, CONFIG.admin_command_prefix))
     )
 
 
@@ -359,6 +386,9 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
                 return
             try:
                 CHAT_STORE.replace_scope_credential("private", int(event.user_id), provider, command.text)
+                CONVERSATION_STORE.set_policy(
+                    Scope("private", int(event.user_id)), use_default_key=False,
+                )
             except ValueError:
                 await ds_matcher.send("API Key 不能为空。")
                 return
@@ -394,10 +424,12 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
         return
     if command.action == "chat_enable":
         CHAT_STORE.set_chat_enabled(True)
+        CONVERSATION_STORE.set_global_enabled("chat", True)
         LOGGER.info("聊天功能已开启 admin_id={}", event.user_id)
         await ds_matcher.send("聊天功能已开启，下载功能一直可用。")
     elif command.action == "chat_disable":
         CHAT_STORE.set_chat_enabled(False)
+        CONVERSATION_STORE.set_global_enabled("chat", False)
         LOGGER.info("聊天功能已停止 admin_id={}", event.user_id)
         await ds_matcher.send("聊天功能已停止，当前只保留下载功能。")
     elif command.action == "chat_status":
@@ -416,6 +448,9 @@ async def handle_ds_command(bot: Bot, event: MessageEvent) -> None:
             )
             return
         CHAT_STORE.replace_scope_credential("group", command.group_id, provider, command.text or "")
+        CONVERSATION_STORE.set_policy(
+            Scope("group", int(command.group_id)), use_default_key=False,
+        )
         LOGGER.info("群聊聊天凭据已更新 group_id={} provider={} admin_id={}", command.group_id, provider, event.user_id)
         await ds_matcher.send(f"群 {command.group_id} 的 {provider} Key 已保存，已切换为独立 Key。")
     elif command.action == "chat_key_confirm":
@@ -480,10 +515,16 @@ async def _is_chat_message(event: MessageEvent) -> bool:
         return False
     if isinstance(event, PrivateMessageEvent) and not is_friend_private_message(event):
         return False
-    plaintext = event.get_plaintext()
-    if parse_jm_message(plaintext, CONFIG.command_prefix, default_format=CONFIG.default_format):
+    if isinstance(event, GroupMessageEvent):
+        policy = CONVERSATION_STORE.get_policy(Scope("group", int(event.group_id)))
+    else:
+        policy = CONVERSATION_STORE.get_policy(Scope("private", int(event.user_id)))
+    if not policy.chat_enabled or policy.chat_blacklisted:
         return False
-    if CONFIG.legacy_admin_commands and parse_jm_admin_message(plaintext, CONFIG.admin_command_prefix):
+    plaintext = event.get_plaintext()
+    if is_removed_jm_admin_command(plaintext, CONFIG.admin_command_prefix):
+        return False
+    if parse_jm_message(plaintext, CONFIG.command_prefix, default_format=CONFIG.default_format):
         return False
     if _message_content(event).strip():
         return True
@@ -498,10 +539,8 @@ chat_matcher = on_message(rule=Rule(_is_chat_message), priority=20, block=True)
 @chat_matcher.handle()
 async def handle_chat_message(bot: Bot, event: MessageEvent) -> None:
     if isinstance(event, GroupMessageEvent):
-        if not CONVERSATION_STORE.get_policy(Scope("group", int(event.group_id))).chat_enabled:
-            return
-        if CONFIG.allowed_group_ids and event.group_id not in CONFIG.allowed_group_ids:
-            LOGGER.warning("群聊被白名单拦截 group_id={} user_id={}", event.group_id, event.user_id)
+        policy = CONVERSATION_STORE.get_policy(Scope("group", int(event.group_id)))
+        if not policy.chat_enabled or policy.chat_blacklisted:
             return
         text = _message_content(event).casefold()
         direct = is_at_bot(event, bot.self_id) or bool(getattr(event, "reply", None)) or any(
@@ -518,7 +557,8 @@ async def handle_chat_message(bot: Bot, event: MessageEvent) -> None:
             if direct:
                 await chat_matcher.send("聊天队列正在处理其他会话，请稍后再试。")
     elif isinstance(event, PrivateMessageEvent) and is_friend_private_message(event):
-        if not CONVERSATION_STORE.get_policy(Scope("private", int(event.user_id))).chat_enabled:
+        policy = CONVERSATION_STORE.get_policy(Scope("private", int(event.user_id)))
+        if not policy.chat_enabled or policy.chat_blacklisted:
             return
         try:
             await CHAT_SCHEDULER.submit(
@@ -549,11 +589,10 @@ async def handle_group_poke(bot: Bot, event: PokeNotifyEvent) -> None:
     if CONFIG.service_role == "download" or CONFIG.chat_backend == "maibot":
         return
     group_id = int(event.group_id)
-    if CONFIG.allowed_group_ids and group_id not in CONFIG.allowed_group_ids:
-        return
     if not CHAT_STORE.is_chat_enabled() or not CONVERSATION_STORE.global_enabled("chat"):
         return
-    if not CONVERSATION_STORE.get_policy(Scope("group", int(event.group_id))).chat_enabled:
+    policy = CONVERSATION_STORE.get_policy(Scope("group", int(event.group_id)))
+    if not policy.chat_enabled or policy.chat_blacklisted:
         return
     await _handle_group_poke(bot, event)
 
@@ -578,6 +617,27 @@ async def capture_approval_request(event: FriendRequestEvent | GroupRequestEvent
 
 
 _approval_tasks: dict[str, asyncio.Task[None]] = {}
+_control_tasks: dict[str, asyncio.Task[None]] = {}
+_heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+def _ensure_heartbeat_worker(bot: Bot) -> None:
+    bot_id = str(bot.self_id)
+    task = _heartbeat_tasks.get(bot_id)
+    if task is None or task.done():
+        _heartbeat_tasks[bot_id] = asyncio.create_task(
+            _heartbeat_worker(bot), name=f"service-heartbeat-{bot_id}",
+        )
+
+
+async def _heartbeat_worker(bot: Bot) -> None:
+    try:
+        while True:
+            ADMIN_STORE.heartbeat("nonebot", True, f"QQ {bot.self_id} connected")
+            await asyncio.sleep(15)
+    except asyncio.CancelledError:
+        ADMIN_STORE.heartbeat("nonebot", False, "NapCat connection disconnected")
+        raise
 
 
 def _ensure_approval_worker(bot: Bot) -> None:
@@ -610,6 +670,50 @@ async def _approval_worker(bot: Bot) -> None:
         await asyncio.sleep(2)
 
 
+def _ensure_control_worker(bot: Bot) -> None:
+    if CONFIG.service_role == "chat":
+        return
+    bot_id = str(bot.self_id)
+    task = _control_tasks.get(bot_id)
+    if task is None or task.done():
+        _control_tasks[bot_id] = asyncio.create_task(
+            _control_action_worker(), name=f"admin-control-outbox-{bot_id}",
+        )
+
+
+async def _control_action_worker() -> None:
+    while True:
+        for action in ADMIN_STORE.claim_control_actions():
+            action_id = int(action["id"])
+            payload = action["payload"]
+            try:
+                if action["name"] == "download_cancel":
+                    job_id = int(payload["job_id"])
+                    changed = ALBUM_QUEUE.admin_cancel_job(job_id)
+                    result = {"job_id": job_id, "changed": changed}
+                elif action["name"] == "download_clear":
+                    result = {"canceled": ALBUM_QUEUE.clear_pending()}
+                elif action["name"] == "download_priority":
+                    job_id = int(payload["job_id"])
+                    job = ALBUM_QUEUE.move_to_front(job_id)
+                    result = {"job_id": job.id, "priority": job.priority}
+                elif action["name"] == "download_delete_failed":
+                    job_id = int(payload["job_id"])
+                    result = {"job_id": job_id, "deleted": ALBUM_QUEUE.delete_failed_job(job_id)}
+                else:
+                    raise ValueError("unsupported control action")
+            except Exception as error:
+                ADMIN_STORE.complete_control_action(action_id, error=type(error).__name__)
+                LOGGER.warning(
+                    "后台下载操作失败 action_id={} action={} error_type={}",
+                    action_id, action["name"], type(error).__name__,
+                )
+            else:
+                ADMIN_STORE.complete_control_action(action_id, result=result)
+                LOGGER.info("后台下载操作已应用 action_id={} action={}", action_id, action["name"])
+        await asyncio.sleep(1)
+
+
 @jm_matcher.handle()
 async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
     is_group_event = isinstance(event, GroupMessageEvent)
@@ -624,12 +728,13 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         return
 
     scope = Scope("group", int(event.group_id)) if is_group_event else Scope("private", int(event.user_id))
-    if not CONVERSATION_STORE.get_policy(scope).download_enabled:
-        await jm_matcher.finish("此会话尚未启用 JM 下载功能。")
+    policy = CONVERSATION_STORE.get_policy(scope)
+    if policy.download_blacklisted:
+        # A blacklist suppresses the download domain completely and must not
+        # disclose that a private/group scope is configured.
         return
-
-    if is_group_event and CONFIG.allowed_group_ids and event.group_id not in CONFIG.allowed_group_ids:
-        await jm_matcher.finish("这个群还没有启用 JM 下载功能。")
+    if not policy.download_enabled:
+        await jm_matcher.finish("此会话尚未启用 JM 下载功能。")
         return
 
     command = parse_jm_message(
@@ -637,8 +742,6 @@ async def handle_jm_command(bot: Bot, event: MessageEvent) -> None:
         CONFIG.command_prefix,
         default_format=CONFIG.default_format,
     )
-    if command is None:
-        command = parse_jm_admin_message(event.get_plaintext(), CONFIG.admin_command_prefix) if CONFIG.legacy_admin_commands else None
     if command is None:
         return
 
@@ -1355,7 +1458,12 @@ async def _attention_loop(bot: Bot) -> None:
 async def _observe_group(bot: Bot, group_id: int) -> None:
     if not CONFIG.group_chat_observe_enabled or not CHAT_STORE.is_chat_enabled():
         return
-    if CONFIG.allowed_group_ids and group_id not in CONFIG.allowed_group_ids:
+    policy_scope = Scope("group", group_id)
+    policy = CONVERSATION_STORE.get_policy(policy_scope)
+    # Use the same scope gate as the message matcher.  An unknown group has a
+    # disabled default policy, so it must not trigger proactive model calls just
+    # because it remains in the in-memory attention set.
+    if not CONVERSATION_STORE.global_enabled("chat") or not policy.chat_enabled or policy.chat_blacklisted:
         return
     lock = _lock_for(_group_chat_locks, group_id)
     if lock.locked():

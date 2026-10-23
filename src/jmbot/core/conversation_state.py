@@ -40,6 +40,8 @@ class ScopePolicy:
     use_default_key: bool = True
     default_persona: bool = True
     growth_enabled: bool = False
+    chat_blacklisted: bool = False
+    download_blacklisted: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,8 @@ class ConversationStateStore:
                     use_default_key INTEGER NOT NULL DEFAULT 1,
                     default_persona INTEGER NOT NULL DEFAULT 1,
                     growth_enabled INTEGER NOT NULL DEFAULT 0,
+                    chat_blacklisted INTEGER NOT NULL DEFAULT 0,
+                    download_blacklisted INTEGER NOT NULL DEFAULT 0,
                     updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS global_policies (
@@ -130,6 +134,11 @@ class ConversationStateStore:
                     ON persona_growth(scope_key, active, id);
                 """
             )
+            policy_columns = {row[1] for row in conn.execute("PRAGMA table_info(conversation_policies)")}
+            if "chat_blacklisted" not in policy_columns:
+                conn.execute("ALTER TABLE conversation_policies ADD COLUMN chat_blacklisted INTEGER NOT NULL DEFAULT 0")
+            if "download_blacklisted" not in policy_columns:
+                conn.execute("ALTER TABLE conversation_policies ADD COLUMN download_blacklisted INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _validate_key(scope_key: str) -> str:
@@ -143,13 +152,14 @@ class ConversationStateStore:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT chat_enabled, download_enabled, use_default_key, default_persona, growth_enabled "
+                "SELECT chat_enabled, download_enabled, use_default_key, default_persona, growth_enabled, chat_blacklisted, download_blacklisted "
                 "FROM conversation_policies WHERE scope_key=?", (key,)
             ).fetchone()
         if not row:
             return ScopePolicy(chat_enabled=not key.startswith("group:"), download_enabled=False)
         return ScopePolicy(*(bool(row[column]) for column in (
-            "chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled"
+            "chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled",
+            "chat_blacklisted", "download_blacklisted"
         )))
 
     def global_enabled(self, key: str) -> bool:
@@ -178,7 +188,7 @@ class ConversationStateStore:
             raise ValueError("invalid scope kind")
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT scope_key,chat_enabled,download_enabled,use_default_key,default_persona,growth_enabled,updated_at "
+                "SELECT scope_key,chat_enabled,download_enabled,use_default_key,default_persona,growth_enabled,chat_blacklisted,download_blacklisted,updated_at "
                 "FROM conversation_policies" + (" WHERE scope_key LIKE ?" if kind else "") + " ORDER BY scope_key",
                 (f"{kind}:%",) if kind else (),
             ).fetchall()
@@ -186,7 +196,7 @@ class ConversationStateStore:
 
     def set_policy(self, scope: Scope | str, **changes: bool) -> ScopePolicy:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
-        allowed = {"chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled"}
+        allowed = {"chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled", "chat_blacklisted", "download_blacklisted"}
         if set(changes) - allowed:
             raise ValueError("unknown policy field")
         current = self.get_policy(key)
@@ -203,11 +213,12 @@ class ConversationStateStore:
                         (key, str(persona[1]), time.time()),
                     )
             conn.execute(
-                "INSERT INTO conversation_policies(scope_key,chat_enabled,download_enabled,use_default_key,default_persona,growth_enabled,updated_at) "
-                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(scope_key) DO UPDATE SET "
+                "INSERT INTO conversation_policies(scope_key,chat_enabled,download_enabled,use_default_key,default_persona,growth_enabled,chat_blacklisted,download_blacklisted,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(scope_key) DO UPDATE SET "
                 "chat_enabled=excluded.chat_enabled,download_enabled=excluded.download_enabled,use_default_key=excluded.use_default_key,"
-                "default_persona=excluded.default_persona,growth_enabled=excluded.growth_enabled,updated_at=excluded.updated_at",
-                (key, *(int(values[name]) for name in ("chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled")), time.time()),
+                "default_persona=excluded.default_persona,growth_enabled=excluded.growth_enabled,"
+                "chat_blacklisted=excluded.chat_blacklisted,download_blacklisted=excluded.download_blacklisted,updated_at=excluded.updated_at",
+                (key, *(int(values[name]) for name in ("chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled", "chat_blacklisted", "download_blacklisted")), time.time()),
             )
         return ScopePolicy(**values)
 

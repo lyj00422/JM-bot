@@ -129,6 +129,17 @@ class ChatServiceTest(unittest.TestCase):
             self.assertFalse(store.uses_default_private_key(42))
             self.assertFalse(store.uses_default_group_key(10001))
 
+    def test_default_key_inheritance_can_be_reenabled_without_deleting_private_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ChatStore(Path(tmp) / "chat.sqlite3")
+            store.set_default_credential("ds_school", "default-key")
+            store.set_private_credential(42, "qwen_school", "private-key")
+            self.assertEqual(store.effective_private_credential(42, "", "ds_school"), ("private-key", "qwen_school"))
+
+            store.set_private_default_inheritance(42, True)
+            self.assertEqual(store.effective_private_credential(42, "", "ds_school"), ("default-key", "ds_school"))
+            self.assertEqual(store.get_private_credential(42, "qwen_school"), "private-key")
+
     def test_legacy_private_and_group_keys_are_migrated_as_school_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "chat.sqlite3"

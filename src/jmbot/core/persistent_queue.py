@@ -335,6 +335,25 @@ class PersistentAlbumQueue:
             cursor = connection.execute("DELETE FROM album_queue WHERE id = ?", (job_id,))
             return cursor.rowcount == 1
 
+    def delete_failed_job(self, job_id: int) -> bool:
+        """Delete one failed history record without touching active work."""
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "DELETE FROM album_queue WHERE id = ? AND status = 'failed'", (job_id,)
+            )
+            return cursor.rowcount == 1
+
+    def admin_cancel_job(self, job_id: int) -> bool:
+        """Cancel one active job by id; processing jobs are cooperatively stopped."""
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE album_queue SET status='canceled', error='canceled by admin', "
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE id=? AND status IN ('pending','processing')",
+                (job_id,),
+            )
+            return cursor.rowcount == 1
+
     def find_latest_active_for_user(
         self,
         *,

@@ -72,7 +72,6 @@ class BotConfig:
     admin_port: int = 8081
     chat_scheduler_workers: int = 2
     chat_scheduler_scope_limit: int = 8
-    legacy_admin_commands: bool = False
 
 
 def parse_int_set(value: str | None) -> set[int]:
@@ -216,5 +215,4 @@ def load_config(env: Mapping[str, str] | None = None) -> BotConfig:
         admin_port=int(source.get("JM_BOT_ADMIN_PORT", "8081")),
         chat_scheduler_workers=parse_positive_int(source, "JM_BOT_CHAT_SCHEDULER_WORKERS", 2),
         chat_scheduler_scope_limit=parse_positive_int(source, "JM_BOT_CHAT_SCHEDULER_SCOPE_LIMIT", 8),
-        legacy_admin_commands=parse_bool(source.get("JM_BOT_LEGACY_ADMIN_COMMANDS"), False),
     )

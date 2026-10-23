@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 from jmbot.core.chat_service import ChatStore, GroupAction, SUPER_FACES, parse_group_action, split_chat_reply
+from jmbot.core.conversation_state import ConversationStateStore, Scope
 from jmbot.config import load_config
 from nonebot.adapters.onebot.v11 import Message, PokeNotifyEvent
 import jmbot.bot as bot_module
@@ -85,8 +86,14 @@ class AttentionBotTest(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = ChatStore(Path(self.tmp.name) / 'chat.db')
         self.store.set_group_key(1, 'test-key')
+        self.conversation_state = ConversationStateStore(Path(self.tmp.name) / 'conversation.db')
+        self.conversation_state.set_policy(Scope('group', 1), chat_enabled=True)
         self.config = replace(load_config({}), group_chat_followup_cooldown_seconds=1)
-        self.patches = [patch.object(bot_module, 'CHAT_STORE', self.store), patch.object(bot_module, 'CONFIG', self.config)]
+        self.patches = [
+            patch.object(bot_module, 'CHAT_STORE', self.store),
+            patch.object(bot_module, 'CONVERSATION_STORE', self.conversation_state),
+            patch.object(bot_module, 'CONFIG', self.config),
+        ]
         for item in self.patches:
             item.start()
         bot_module._group_chat_locks.clear()
@@ -191,6 +198,14 @@ class AttentionBotTest(unittest.IsolatedAsyncioTestCase):
     async def test_observation_skips_group_already_in_active_window(self):
         self.store.append_group_message(1, '甲', 'hi', user_id=42, message_id=101)
         self.store.set_group_active_until(1, time.time() + 100)
+        with patch.object(bot_module, 'request_chat_completion') as request:
+            await bot_module._observe_group(self.bot, 1)
+        request.assert_not_called()
+        self.bot.call_api.assert_not_awaited()
+
+    async def test_observation_respects_scope_chat_blacklist(self):
+        self.store.append_group_message(1, '甲', 'hi', user_id=42, message_id=101)
+        self.conversation_state.set_policy(Scope('group', 1), chat_enabled=True, chat_blacklisted=True)
         with patch.object(bot_module, 'request_chat_completion') as request:
             await bot_module._observe_group(self.bot, 1)
         request.assert_not_called()

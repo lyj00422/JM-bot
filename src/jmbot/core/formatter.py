@@ -91,15 +91,18 @@ def format_chat_help(command_prefix: str = "/ds", *, topic: str | None = None) -
     prefix = command_prefix
     topics = {
         "私聊": [
-            "私聊聊天：",
-            f"{prefix} 你的 API Key",
+            f"{prefix} 你的 API Key（默认官方 DS）",
+            f"{prefix} 学校 你的 API Key",
+            "/glm、/qwen、/kimi 你的 API Key",
             f"{prefix} 状态",
             f"{prefix} 清除",
             f"{prefix} 清空",
         ],
         "群聊": [
             "群聊 Key（管理员私聊机器人）：",
-            f"{prefix} 群聊key 群号 API_KEY",
+            f"{prefix} 群号\\API_KEY（默认官方 DS）",
+            f"{prefix} 学校 群号\\API_KEY",
+            "/glm、/qwen、/kimi 群号\\API_KEY",
             f"{prefix} 群聊key 群号 查看",
             f"{prefix} 群聊key 群号 清除",
         ],

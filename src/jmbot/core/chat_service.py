@@ -245,7 +245,10 @@ class ChatStore:
 
     def set_default_provider(self, provider: str) -> None:
         normalized = provider.strip().lower()
-        if normalized not in {"ds_school", "ds_official", "glm_official", "kimi_official", "qwen_official"}:
+        if normalized not in {
+            "ds_school", "ds_official", "glm_school", "glm_official",
+            "kimi_school", "kimi_official", "qwen_school", "qwen_official",
+        }:
             raise ValueError("unsupported provider")
         with self._connection() as connection:
             connection.execute(
