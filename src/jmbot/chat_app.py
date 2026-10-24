@@ -29,6 +29,11 @@ from jmbot.service_rpc import RPCClient, RemoteStore, mount_rpc
 TASKS = ('planner', 'replyer', 'utils', 'fast_model', 'memory', 'mid_memory', 'learner', 'emoji', 'vlm', 'voice', 'embedding', 'image_embedding')
 
 
+def chat_proxy():
+    """Optional forward proxy for model calls (school gateways may need iWAN)."""
+    return os.environ.get('JM_BOT_CHAT_PROXY', '').strip() or None
+
+
 class Ingress:
     def __init__(self, loop, queue):
         self.loop, self.queue = loop, queue
@@ -108,7 +113,7 @@ def create_chat_app():
             async with semaphore, task_semaphore:
                 if not state.permitted(scope) or not state.get_policy(scope).growth_enabled:
                     raise ValueError('growth permission revoked')
-                async with httpx.AsyncClient(timeout=45, trust_env=False) as client:
+                async with httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
                     result = await client.post(route['base_url'].rstrip('/') + '/chat/completions',
                         headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'temperature': 0,
                         'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 600})
@@ -339,7 +344,7 @@ def create_chat_app():
             semaphore = provider_limits.setdefault(grant['provider'], asyncio.Semaphore(2))
             task_semaphore = task_limits.setdefault((grant['provider'], task, binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
             async with semaphore, task_semaphore:
-                async with httpx.AsyncClient(timeout=60, follow_redirects=False, trust_env=False) as client:
+                async with httpx.AsyncClient(timeout=60, follow_redirects=False, trust_env=False, proxy=chat_proxy()) as client:
                     try:
                         response = await client.post(route['base_url'].rstrip('/') + '/' + operation,
                                                      headers={'Authorization': 'Bearer ' + key}, json=body)
@@ -379,7 +384,7 @@ def create_chat_app():
                 async def execute():
                     semaphore = provider_limits.setdefault(provider, asyncio.Semaphore(2))
                     task_semaphore = task_limits.setdefault((provider, 'vlm', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
-                    async with semaphore, task_semaphore, httpx.AsyncClient(timeout=60, trust_env=False) as client:
+                    async with semaphore, task_semaphore, httpx.AsyncClient(timeout=60, trust_env=False, proxy=chat_proxy()) as client:
                         if not state.permitted(scope):
                             raise ValueError('scope revoked')
                         response = await client.post(route['base_url'].rstrip('/') + '/chat/completions', headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'messages': [{'role': 'user', 'content': content}], 'max_tokens': 3000, 'temperature': 0})
