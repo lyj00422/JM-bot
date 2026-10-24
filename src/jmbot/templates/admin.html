@@ -140,9 +140,105 @@
     async function loadHelp() { try { $("help-text").value = (await api("/api/help/jm")).content; } catch (error) { note(error.message); } }
     $("save-help").onclick = async () => { try { await api("/api/help/jm", { method: "PUT", body: JSON.stringify({ content: $("help-text").value }) }); note("帮助文本已保存"); } catch (error) { note(error.message); } };
     async function loadDownloadStatus() { try { const rows = await api("/api/download/scopes"); $("download-status").replaceChildren(); rows.forEach((scope) => { const row = document.createElement("div"); row.className = "item"; const label = document.createElement("div"); label.textContent = scope.scope_key; const controls = document.createElement("div"); controls.className = "row"; for (const [key, title] of [["download_enabled", "下载"], ["download_blacklisted", "下载黑名单"]]) { const button = document.createElement("button"); button.textContent = `${title}${scope[key] ? "：开" : "：关"}`; button.onclick = async () => { try { await api(`/api/scopes/${scope.scope_key.replace(":", "/")}/policy`, { method: "PATCH", body: JSON.stringify({ [key]: !scope[key] }) }); await loadDownloadStatus(); } catch (error) { note(error.message); } }; controls.append(button); } row.append(label, controls); $("download-status").append(row); }); if (!rows.length) $("download-status").textContent = "尚未配置会话权限"; } catch (error) { note(error.message); } }
-    async function loadDownloadQueue() { try { const [rows, actions] = await Promise.all([api("/api/download/queue"), api("/api/download/actions")]); $("download-queue").replaceChildren(); rows.forEach((job) => { const row = document.createElement("div"); row.className = "item"; const text = document.createElement("div"); text.textContent = `#${job.id} · JM${job.album_id} · ${job.status} · ${job.destination_type === "group" ? `群 ${job.group_id}` : `私聊 ${job.user_id}`} · ${job.stage}${job.error ? ` · ${job.error}` : ""}`; row.append(text); if (["pending", "processing"].includes(job.status)) { const controls = document.createElement("div"); controls.className = "row"; const cancel = document.createElement("button"); cancel.textContent = "取消"; cancel.onclick = async () => { try { await api(`/api/download/queue/${job.id}/cancel`, { method: "POST" }); note("取消操作已排队"); setTimeout(loadDownloadQueue, 1100); } catch (error) { note(error.message); } }; controls.append(cancel); if (job.status === "pending") { const priority = document.createElement("button"); priority.textContent = "插队"; priority.onclick = async () => { try { await api(`/api/download/queue/${job.id}/priority`, { method: "POST" }); note("优先级操作已排队"); setTimeout(loadDownloadQueue, 1100); } catch (error) { note(error.message); } }; controls.append(priority); } row.append(controls); } else if (job.status === "failed") { const remove = document.createElement("button"); remove.className = "danger"; remove.textContent = "删除失败记录"; remove.onclick = async () => { if (!confirm(`删除任务 #${job.id} 的失败记录？`)) return; try { await api(`/api/download/queue/${job.id}/failed`, { method: "DELETE" }); note("删除操作已排队"); setTimeout(loadDownloadQueue, 1100); } catch (error) { note(error.message); } }; row.append(remove); } $("download-queue").append(row); }); if (!rows.length) $("download-queue").textContent = "队列为空"; $("queue-actions").textContent = actions.slice(0, 5).map((item) => `操作 #${item.id}：${item.status}${item.error ? `（${item.error}）` : ""}`).join("；") || "暂无后台操作"; } catch (error) { note(error.message); } }
+    const QUEUE_STAGE = { queued: "排队", downloading: "下载中", packaging: "打包中", uploading: "上传中" };
+    function queueTime(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? (value || "-") : date.toLocaleString("zh-CN", { hour12: false }); }
+    function queueProgress(job) {
+      if (job.status === "pending") return "正在排队";
+      if (job.status === "processing") {
+        const stage = QUEUE_STAGE[job.stage] || job.stage || "";
+        const count = Number(job.progress_total) > 0 ? ` ${job.progress_current}/${job.progress_total}` : "";
+        return `正在下载${stage || count ? `（${stage}${count}）` : ""}`;
+      }
+      if (job.status === "done") return "已完成";
+      if (job.status === "failed") return `失败${job.error ? `：${job.error}` : ""}`;
+      return job.status;
+    }
+    async function waitControlAction(actionId) {
+      for (let attempt = 0; attempt < 14; attempt += 1) {
+        const actions = await api("/api/download/actions");
+        const found = actions.find((item) => item.id === actionId);
+        if (found && found.status !== "pending" && found.status !== "processing") return found;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return null;
+    }
+    async function loadDownloadQueue() {
+      try {
+        const [rows, actions] = await Promise.all([api("/api/download/queue"), api("/api/download/actions")]);
+        const counts = rows.reduce((acc, job) => { acc[job.status] = (acc[job.status] || 0) + 1; return acc; }, {});
+        const summary = document.createElement("div");
+        summary.className = "muted";
+        summary.textContent = `排队 ${counts.pending || 0} · 下载中 ${counts.processing || 0} · 已完成 ${counts.done || 0} · 失败 ${counts.failed || 0}`;
+        $("download-queue").replaceChildren(summary);
+        rows.forEach((job) => {
+          const row = document.createElement("div");
+          row.className = "item";
+          const text = document.createElement("div");
+          const target = job.destination_type === "group" ? `群 ${job.group_id}` : `私聊 ${job.user_id}`;
+          text.textContent = `${queueTime(job.created_at)} · ${target} · JM${job.album_id} · ${queueProgress(job)}`;
+          row.append(text);
+          if (["pending", "processing"].includes(job.status)) {
+            const controls = document.createElement("div");
+            controls.className = "row";
+            const cancel = document.createElement("button");
+            cancel.textContent = "取消";
+            cancel.onclick = async () => {
+              try {
+                const result = await api(`/api/download/queue/${job.id}/cancel`, { method: "POST" });
+                const action = await waitControlAction(result.action_id);
+                note(action?.result?.changed ? "已取消该任务" : action?.result?.changed === false ? "任务已在处理中或已结束，未能取消" : "取消操作已提交");
+                await loadDownloadQueue();
+              } catch (error) { note(error.message); }
+            };
+            controls.append(cancel);
+            if (job.status === "pending") {
+              const priority = document.createElement("button");
+              priority.textContent = "插队";
+              priority.onclick = async () => {
+                try {
+                  const result = await api(`/api/download/queue/${job.id}/priority`, { method: "POST" });
+                  await waitControlAction(result.action_id);
+                  note("已插队到队列最前");
+                  await loadDownloadQueue();
+                } catch (error) { note(error.message); }
+              };
+              controls.append(priority);
+            }
+            row.append(controls);
+          } else if (job.status === "failed") {
+            const remove = document.createElement("button");
+            remove.className = "danger";
+            remove.textContent = "删除失败记录";
+            remove.onclick = async () => {
+              if (!confirm(`删除任务 #${job.id} 的失败记录？`)) return;
+              try {
+                const result = await api(`/api/download/queue/${job.id}/failed`, { method: "DELETE" });
+                const action = await waitControlAction(result.action_id);
+                note(action?.result?.deleted ? "失败记录已删除" : "删除操作已提交");
+                await loadDownloadQueue();
+              } catch (error) { note(error.message); }
+            };
+            row.append(remove);
+          }
+          $("download-queue").append(row);
+        });
+        if (!rows.length) $("download-queue").textContent = "队列为空";
+        $("queue-actions").textContent = actions.slice(0, 5).map((item) => `操作 #${item.id}：${item.status === "pending" ? "待执行" : item.status === "processing" ? "执行中" : item.status === "done" ? "已完成" : item.status}${item.error ? `（${item.error}）` : ""}`).join("　");
+      } catch (error) { note(error.message); }
+    }
     $("refresh-queue").onclick = loadDownloadQueue;
-    $("clear-queue").onclick = async () => { if (!confirm("清空所有待处理下载任务？正在处理的任务不会被终止。")) return; try { await api("/api/download/queue/clear", { method: "POST" }); note("清空操作已排队"); setTimeout(loadDownloadQueue, 1100); } catch (error) { note(error.message); } };
+    $("clear-queue").onclick = async () => {
+      if (!confirm("清空所有待处理下载任务？正在处理的任务不会被终止。")) return;
+      try {
+        const rows = await api("/api/download/queue");
+        const pending = rows.filter((job) => job.status === "pending").length;
+        const result = await api("/api/download/queue/clear", { method: "POST" });
+        const action = await waitControlAction(result.action_id);
+        const canceled = action?.result?.canceled;
+        note(canceled === undefined ? "清空操作已提交" : canceled > 0 ? `已清空 ${canceled} 个排队任务` : (pending > 0 ? "清空操作未生效，请稍后重试" : "当前没有排队中的任务"));
+        await loadDownloadQueue();
+      } catch (error) { note(error.message); }
+    };
     $("add-download-scope").onclick = async () => { try { await api(`/api/scopes/${$("download-kind").value}/${$("download-owner").value}/policy`, { method: "PATCH", body: JSON.stringify({ download_enabled: false }) }); await loadDownloadStatus(); note("会话已添加，当前权限关闭"); } catch (error) { note(error.message); } };
     async function loadAdmins() { try { const rows = await api("/api/admins"); $("admin-list").textContent = rows.map((row) => `QQ ${row.qq_id}${row.is_super ? "（超级管理员）" : ""}${row.enabled ? "" : "（已停用）"}`).join("\n"); } catch (error) { note(error.message); } }
     $("add-admin").onclick = async () => { try { await api("/api/admins", { method: "POST", body: JSON.stringify({ qq_id: Number($("new-admin-qq").value), password: $("new-admin-password").value }) }); $("new-admin-password").value = ""; note("管理员已添加"); await loadAdmins(); } catch (error) { note(error.message); } };
