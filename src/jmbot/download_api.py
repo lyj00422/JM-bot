@@ -96,10 +96,30 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
                 return {'friends': friends or [], 'groups': groups or []}
             return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(20)
 
+        def set_friend_remark(self, user_id, remark):
+            import os as _os
+            from nonebot import get_bot
+            if isinstance(remark, str) is False or len(remark) > 60:
+                raise ValueError('invalid remark')
+            account = _os.environ.get('JM_BOT_QQ_ACCOUNT', '')
+            async def invoke():
+                return await get_bot(account).call_api('set_friend_remark', user_id=int(user_id), remark=remark)
+            return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(15)
+
+        def set_group_remark(self, group_id, remark):
+            import os as _os
+            from nonebot import get_bot
+            if isinstance(remark, str) is False or len(remark) > 60:
+                raise ValueError('invalid remark')
+            account = _os.environ.get('JM_BOT_QQ_ACCOUNT', '')
+            async def invoke():
+                return await get_bot(account).call_api('set_group_remark', group_id=int(group_id), remark=remark)
+            return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(15)
+
     transport = QQTransport()
     @driver.on_startup
     async def capture_loop():
         transport.loop = asyncio.get_running_loop()
     mount_rpc(app, token=token, ledger=Path(queue_path).with_name('download-rpc.sqlite3'),
               targets={'download': DownloadControl(queue), 'download_state': state, 'qq': transport},
-              allowed={'download': {'snapshot'}, 'download_state': {'get_policy', 'set_policy', 'has_policy', 'list_policies', 'global_enabled', 'set_global_enabled', 'permitted', 'policy_version'}, 'qq': {'send', 'send_configuration', 'media', 'status', 'roster'}})
+              allowed={'download': {'snapshot'}, 'download_state': {'get_policy', 'set_policy', 'has_policy', 'list_policies', 'global_enabled', 'set_global_enabled', 'permitted', 'policy_version'}, 'qq': {'send', 'send_configuration', 'media', 'status', 'roster', 'set_friend_remark', 'set_group_remark'}})

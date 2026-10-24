@@ -73,7 +73,12 @@
     <header><strong>JMbot 管理后台</strong><div class="row"><span id="identity"></span><button id="logout">退出</button></div></header>
     <div class="shell">
       <nav id="nav">
-        <button data-page="monitor" class="active">监控</button>
+        <button data-page="monitor" class="active">状态</button>
+        <div class="nav-group"><span>监控</span>
+          <button data-page="groups">群聊</button>
+          <button data-page="friends">私聊</button>
+          <button data-page="approvals">申请</button>
+        </div>
         <div class="nav-group"><span>聊天</span>
           <button data-page="credentials">API Key</button>
           <button data-page="persona">人设与成长</button>
@@ -84,11 +89,12 @@
           <button data-page="download-queue">队列</button>
           <button data-page="download-help">帮助文本</button>
         </div>
-        <button data-page="approvals">审批</button>
         <button id="admin-nav" data-page="admins" hidden>管理员账号</button>
       </nav>
       <main>
         <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state" class="muted">读取 NapCat 登录状态；掉线时点「获取二维码」扫码登录。</div></div><button id="refresh-status">刷新</button></section>
+        <section class="section" id="page-groups"><h1>群聊监控</h1><div class="panel"><div class="row"><label>搜索<input id="monitor-group-search" placeholder="群号 / 群名 / 备注"></label><button id="refresh-groups">刷新</button></div><div id="monitor-group-list" class="muted">加载中…</div></div></section>
+        <section class="section" id="page-friends"><h1>私聊监控</h1><div class="panel"><div class="row"><label>搜索<input id="monitor-friend-search" placeholder="QQ / 昵称 / 备注"></label><button id="refresh-friends">刷新</button></div><div id="monitor-friend-list" class="muted">加载中…</div></div></section>
         <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
         <section class="section" id="page-credentials"><h1>API Key</h1><p class="muted">Key 保存后只显示配置状态。会话使用默认 Key 时，保存独立 Key 会切换到独立配置。</p><div id="credential-list"></div><div class="panel"><h2>设置默认 Key</h2><div class="grid"><label>默认服务商<select id="default-provider"><option value="ds_school">学校</option><option value="ds_official">DS 官方</option><option value="glm_school">学校 GLM</option><option value="glm_official">GLM 官方</option><option value="kimi_school">学校 Kimi</option><option value="kimi_official">Kimi 官方</option><option value="qwen_school">学校 Qwen</option><option value="qwen_official">Qwen 官方</option></select></label><label>默认 API Key<input id="default-key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-default-key" class="primary">保存默认 Key</button></p></div><div class="panel"><h2>设置会话 Key</h2><div class="grid"><label>会话类型<select id="key-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="key-owner" inputmode="numeric"></label><label>服务商<select id="key-provider"><option value="ds_official">DS 官方</option><option value="ds_school">学校 DS</option><option value="glm_official">GLM 官方</option><option value="glm_school">学校 GLM</option><option value="kimi_official">Kimi 官方</option><option value="kimi_school">学校 Kimi</option><option value="qwen_official">Qwen 官方</option><option value="qwen_school">学校 Qwen</option></select></label><label>API Key<input id="key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-key" class="primary">保存 Key</button></p></div></section>
         <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话开关</h2><p class="muted">按群聊/私聊控制「使用默认人设」和「角色成长」；两者互斥，始终保留一个开启。</p><div class="row"><label>分类<select id="persona-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="persona-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="persona-scope-list" class="muted">加载中…</div><p><button id="refresh-persona-scopes">刷新会话列表</button></p></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
@@ -130,6 +136,8 @@
       if (page === "download-queue") loadDownloadQueue();
       if (page === "download-help") loadHelp();
       if (page === "approvals") loadApprovals("pending");
+      if (page === "groups") loadMonitor("group");
+      if (page === "friends") loadMonitor("private");
     });
     async function loadStatus() { try { const data = await api("/api/status"); $("services").innerHTML = Object.entries(data.services).map(([name, value]) => `<div class="item"><div>${escapeHtml(name)}<small>${escapeHtml(value.detail || "")}</small></div><span class="status ${value.healthy ? "ok" : "bad"}">${value.healthy ? "在线" : "离线"}</span></div>`).join("") || "<p class='muted'>暂无服务心跳</p>"; } catch (error) { note(error.message); } }
     $("refresh-status").onclick = loadStatus;
@@ -381,6 +389,58 @@
         });
       } catch (error) { note(error.message); }
     }
+    async function loadMonitor(kind, force = false) {
+      try {
+        if (force) { rosterCache = null; }
+        const roster = await loadRoster();
+        const isGroup = kind === "group";
+        const search = $(isGroup ? "monitor-group-search" : "monitor-friend-search").value.trim();
+        const rows = (isGroup ? roster.groups : roster.friends) || [];
+        const visible = rows.filter((row) => {
+          if (!search) return true;
+          const id = String(isGroup ? row.group_id : row.user_id);
+          const name = String(isGroup ? row.group_name : row.nickname) || "";
+          const remark = String(isGroup ? row.group_remark : row.remark) || "";
+          return id.includes(search) || name.includes(search) || remark.includes(search);
+        });
+        const box = $(isGroup ? "monitor-group-list" : "monitor-friend-list");
+        box.replaceChildren();
+        if (!visible.length) { box.textContent = rows.length ? "没有匹配的会话" : "列表为空（确认机器人已登录）"; return; }
+        visible.forEach((row) => {
+          const id = Number(isGroup ? row.group_id : row.user_id);
+          const name = String((isGroup ? row.group_name : row.nickname) || "");
+          const remark = String((isGroup ? row.group_remark : row.remark) || "");
+          const item = document.createElement("div"); item.className = "item";
+          const label = document.createElement("div");
+          label.textContent = isGroup ? `群 ${name}（${id}）` : `QQ ${name}（${id}）`;
+          if (isGroup && row.member_count) label.textContent += ` · ${row.member_count} 人`;
+          const controls = document.createElement("div"); controls.className = "row";
+          const input = document.createElement("input");
+          input.value = remark;
+          input.placeholder = isGroup ? "群备注" : "好友备注";
+          input.maxLength = 60;
+          input.style.maxWidth = "240px";
+          const save = document.createElement("button"); save.textContent = "保存备注";
+          save.onclick = async () => {
+            save.disabled = true;
+            try {
+              await api(`/api/roster/${isGroup ? "group" : "friend"}/${id}/remark`, { method: "POST", body: JSON.stringify({ remark: input.value }) });
+              rosterCache = null;
+              note("备注已更新");
+              await loadMonitor(kind);
+            } catch (error) { note(error.message); }
+            finally { save.disabled = false; }
+          };
+          controls.append(input, save);
+          item.append(label, controls);
+          box.append(item);
+        });
+      } catch (error) { note(error.message); }
+    }
+    $("refresh-groups").onclick = () => loadMonitor("group", true);
+    $("refresh-friends").onclick = () => loadMonitor("private", true);
+    $("monitor-group-search").oninput = () => loadMonitor("group");
+    $("monitor-friend-search").oninput = () => loadMonitor("private");
     let rosterCache = null, rosterCacheAt = 0;
     async function loadRoster(force = false) {
       if (!force && rosterCache && Date.now() - rosterCacheAt < 60000) return rosterCache;

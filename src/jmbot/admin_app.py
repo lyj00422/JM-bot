@@ -410,6 +410,10 @@ class GlobalPolicyBody(BaseModel):
     enabled: bool
 
 
+class RemarkBody(BaseModel):
+    remark: str = Field(default="", max_length=60)
+
+
 class PersonaBody(BaseModel):
     prompt: str = Field(min_length=1, max_length=20000)
     expected_version: int | None = None
@@ -622,6 +626,20 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     @app.get("/api/download/actions")
     async def download_actions(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
         return admins.control_actions()
+
+    @app.post("/api/roster/group/{group_id}/remark")
+    async def set_group_remark(group_id: int, body: RemarkBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+        if download_client is None:
+            raise HTTPException(status_code=503, detail="下载服务未连接")
+        await asyncio.to_thread(download_client.call, "qq", "set_group_remark", group_id, body.remark)
+        return {"ok": True}
+
+    @app.post("/api/roster/friend/{user_id}/remark")
+    async def set_friend_remark(user_id: int, body: RemarkBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+        if download_client is None:
+            raise HTTPException(status_code=503, detail="下载服务未连接")
+        await asyncio.to_thread(download_client.call, "qq", "set_friend_remark", user_id, body.remark)
+        return {"ok": True}
 
     @app.get("/api/roster")
     async def qq_roster(_: int = Depends(require_admin)) -> dict[str, Any]:
