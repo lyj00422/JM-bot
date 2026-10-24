@@ -26,16 +26,16 @@ class NativeControl:
             raise ValueError('unsupported memory fields')
         arguments['limit'] = min(int(arguments.get('limit', 200)), 500)
         async def invoke():
-            entry = self.pool.processes.get(identity)
+            entry = self.pool.processes.get(self.pool.runtime_identity(identity))
             if not entry or entry['process'].returncode is not None:
                 raise RuntimeError('native instance is offline; send a permitted message to start it')
-            directory = self.pool.root / identity.replace(':', '_') / 'control'
+            directory = self.pool.directory(identity) / 'control'
             directory.mkdir(exist_ok=True)
             if len(list(directory.glob('*.request'))) >= 16:
                 raise RuntimeError('native control capacity reached')
             name = uuid.uuid4().hex
             temporary, request, response = (directory / (name + ext) for ext in ('.tmp', '.request', '.response'))
-            temporary.write_text(json.dumps({'action': action, 'arguments': arguments}), encoding='utf-8')
+            temporary.write_text(json.dumps({'scope': scope, 'action': action, 'arguments': arguments}), encoding='utf-8')
             os.replace(temporary, request)
             try:
                 deadline = time.monotonic() + 25
@@ -53,7 +53,7 @@ class NativeControl:
         return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(28)
 
 
-async def serve_control(directory):
+async def serve_control(directory, sessions):
     from src.A_memorix.host_service import a_memorix_host_service
     directory = Path(directory) / 'control'
     directory.mkdir(exist_ok=True)
@@ -61,20 +61,26 @@ async def serve_control(directory):
         for request in sorted(directory.glob('*.request'))[:16]:
             try:
                 body = json.loads(request.read_text(encoding='utf-8'))
+                scope = body['scope']
+                await sessions.refresh(scope)
                 if body['action'] == 'list' and not body['arguments'].get('scope_id'):
                     # This kernel owns only this account/scope instance. Discover
                     # native subjects instead of asking operators to guess hashes.
-                    kernel = await a_memorix_host_service._ensure_kernel()
-                    store = kernel.metadata_store
-                    limit = min(int(body['arguments'].get('limit', 200)), 500)
-                    def list_owned():
-                        rows = store._conn.execute('SELECT claim_id FROM fact_claims ORDER BY updated_at DESC LIMIT ?', (limit,)).fetchall()
-                        return [store.get_fact_claim(row[0]) for row in rows]
-                    items = await asyncio.to_thread(list_owned)
+                    async with a_memorix_host_service.lease(scope) as host:
+                        if host is None:
+                            raise RuntimeError('memory is disabled')
+                        kernel = await host._ensure_kernel()
+                        store = kernel.metadata_store
+                        limit = min(int(body['arguments'].get('limit', 200)), 500)
+                        def list_owned():
+                            rows = store._conn.execute('SELECT claim_id FROM fact_claims ORDER BY updated_at DESC LIMIT ?', (limit,)).fetchall()
+                            return [store.get_fact_claim(row[0]) for row in rows]
+                        items = await asyncio.to_thread(list_owned)
                     result = {'success': True, 'items': items, 'count': len(items)}
                 else:
-                    result = await a_memorix_host_service.invoke(
-                        'memory_fact_admin', {'action': body['action'], **body['arguments']}, timeout_ms=20000)
+                    with sessions.bind(scope):
+                        result = await a_memorix_host_service.invoke(
+                            'memory_fact_admin', {'action': body['action'], **body['arguments']}, timeout_ms=20000)
             except Exception:
                 result = {'error': 'native memory operation failed'}
             response = request.with_suffix('.response')

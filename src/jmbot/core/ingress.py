@@ -53,7 +53,7 @@ def classify(event: dict, prefix: str = '/jm') -> Route:
         return Route('drop', scope)
     message = event.get('message', [])
     mentioned = isinstance(message, list) and any(segment.get('type') == 'at' and isinstance(segment.get('data'), dict) and str(segment['data'].get('qq')) == str(event.get('self_id')) for segment in message if isinstance(segment, dict))
-    return Route('chat', scope, kind == 'private' or mentioned or post == 'notice')
+    return Route('chat', scope, mentioned)
 
 
 def account_scope(event: dict, scope: str) -> str:

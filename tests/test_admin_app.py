@@ -35,6 +35,7 @@ class AdminAppTest(unittest.TestCase):
         state = self.app.routes
         self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/policy" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/persona/default" for route in state))
+        self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/persona/effective" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/download/queue/{job_id}/failed" for route in state))
 
     def test_credentials_never_return_secret(self):

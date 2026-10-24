@@ -97,6 +97,30 @@ def test_admin_csrf_session_revocation_and_role(tmp_path):
         assert client.post('/api/admins', json={'qq_id': 43, 'password': 'third-password-123'}, headers={'X-CSRF-Token': csrf}).status_code == 403
 
 
+def test_admin_effective_persona_editor_round_trip(tmp_path):
+    app = create_admin_app(admin_db=tmp_path / 'admin.db', conversation_db=tmp_path / 'state.db', sticker_dir=tmp_path / 'stickers')
+    app.state.admin_store.set_password(SUPER_ADMIN_ID, 'test-password-123', is_super=True)
+    state = ConversationStateStore(tmp_path / 'state.db')
+    state.set_policy('group:42', growth_enabled=True, default_persona=False)
+    state.set_base_persona('group:42', '基础人设')
+    state.add_growth('group:42', 'interest', '喜欢鲸鱼', '消息 1: 聊到鲸鱼')
+    with TestClient(app) as client:
+        assert client.post('/api/login', json={'qq_id': SUPER_ADMIN_ID, 'password': 'test-password-123'}).status_code == 200
+        csrf = client.cookies['jmbot_csrf']
+        detail = client.get('/api/scopes/group/42').json()
+        assert '喜欢鲸鱼' in detail['effective_persona']
+        saved = client.put('/api/scopes/group/42/persona/effective', json={'prompt': detail['effective_persona'], 'expected_version': detail['base_version'], 'expected_revision': detail['effective_revision']}, headers={'X-CSRF-Token': csrf})
+        assert saved.status_code == 200, saved.text
+        refreshed = client.get('/api/scopes/group/42').json()
+        assert refreshed['effective_persona'] == detail['effective_persona']
+        assert all(entry['frozen'] for entry in refreshed['growth'])
+        state.add_growth('group:42', 'expression', '新的表达', '消息 2')
+        conflict = client.put('/api/scopes/group/42/persona/effective', json={'prompt': '过期编辑稿', 'expected_version': refreshed['base_version'], 'expected_revision': refreshed['effective_revision']}, headers={'X-CSRF-Token': csrf})
+        assert conflict.status_code == 409
+        assert state.get_base_persona('group:42')[0] == detail['effective_persona']
+        assert not state.list_growth('group:42')[-1].frozen
+
+
 def test_sqlite_wal_backup_restore_migration_and_key_check(tmp_path):
     source = tmp_path / 'live'
     source.mkdir()
@@ -201,7 +225,7 @@ def test_growth_cancellation_preserves_durable_job(tmp_path):
     from jmbot.growth_worker import GrowthWorker
     state = ConversationStateStore(tmp_path / 'state.db')
     state.set_policy('private:42', chat_enabled=True, growth_enabled=True)
-    for index in range(3):
+    for index in range(30):
         state.record_source('private:42', str(index), '42', 'source', time.time() + index)
     async def check():
         started = asyncio.Event()

@@ -8,6 +8,7 @@ serves scopes round-robin, so one hot group cannot consume all workers.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ class _Job:
     operation: Callable[[], Awaitable[T]]
     future: asyncio.Future[T]
     passive: bool
+    priority: bool = False
+    queued_at: float = 0
 
 
 class FairChatScheduler:
@@ -65,7 +68,7 @@ class FairChatScheduler:
             self._ready.clear()
             self._ready_set.clear()
 
-    async def submit(self, scope: str, operation: Callable[[], Awaitable[T]], *, passive: bool = False, timeout: float | None = None) -> T:
+    async def submit(self, scope: str, operation: Callable[[], Awaitable[T]], *, passive: bool = False, priority: bool = False, timeout: float | None = None) -> T:
         if not scope or ":" not in scope:
             raise ValueError("scope must be private:<id> or group:<id>")
         if self._closed:
@@ -97,7 +100,7 @@ class FairChatScheduler:
                     del queue[passive_index]
                     if not displaced.future.done():
                         displaced.future.set_result(None)
-            job = _Job(scope, operation, future, passive)
+            job = _Job(scope, operation, future, passive, priority, time.monotonic())
             if passive:
                 queue.append(job)
             else:
@@ -135,11 +138,22 @@ class FairChatScheduler:
                 if not self._ready:
                     await self._condition.wait()
                     continue
+                # Explicit mentions may jump ahead, but an aged peer cannot
+                # be displaced forever by a stream of mentions in a hot group.
+                eligible = [scope for scope in self._ready if scope not in self._busy and self._queues.get(scope)]
+                if eligible:
+                    aged = [scope for scope in eligible if time.monotonic() - self._queues[scope][0].queued_at >= 15]
+                    selected = min(aged, key=lambda scope: self._queues[scope][0].queued_at) if aged else next((scope for scope in eligible if self._queues[scope][0].priority), None)
+                    if selected:
+                        self._ready.remove(selected)
+                        self._ready.appendleft(selected)
                 scope = self._ready.popleft()
                 self._ready_set.discard(scope)
                 if scope in self._busy:
                     continue
-                queue = self._queues[scope]
+                queue = self._queues.get(scope)
+                if not queue:
+                    continue
                 job = queue.popleft()
                 self._busy.add(scope)
                 if not queue:

@@ -23,17 +23,10 @@ class BotRankingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("内容已脱敏", description)
         self.assertNotIn("very-secret-key", description)
 
-    async def test_chat_reply_quotes_trigger_message_once(self):
-        matcher = AsyncMock()
-        config = SimpleNamespace(chat_reply_max_length=500)
-
-        with patch.object(bot_module, "CONFIG", config):
-            await bot_module._send_chat_reply(matcher, "收到", reply_message_id=1234)
-
-        message = matcher.send.await_args.args[0]
-        self.assertEqual(message[0].type, "reply")
-        self.assertEqual(message[0].data["id"], "1234")
-        self.assertEqual(str(message[1]), "收到")
+    async def test_nonebot_does_not_register_legacy_chat_decisions(self):
+        self.assertFalse(hasattr(bot_module, "chat_matcher"))
+        self.assertFalse(hasattr(bot_module, "_attention_loop"))
+        self.assertFalse(hasattr(bot_module, "_handle_group_chat"))
 
     async def test_send_ranking_card_copies_covers_delivers_and_cleans(self):
         with tempfile.TemporaryDirectory() as tmp:

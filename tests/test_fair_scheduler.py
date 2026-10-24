@@ -1,10 +1,35 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from jmbot.core.fair_scheduler import FairChatScheduler
 
 
 class FairSchedulerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_mentions_precede_young_peers_but_never_starve_aged_peer(self):
+        for aged in (False, True):
+            scheduler = FairChatScheduler(workers=1)
+            gate = asyncio.Event()
+            started = asyncio.Event()
+            seen = []
+            async def hold():
+                started.set()
+                await gate.wait()
+            first = asyncio.create_task(scheduler.submit('group:9', hold))
+            await started.wait()
+            peer = asyncio.create_task(scheduler.submit('group:2', lambda: record('peer')))
+            await asyncio.sleep(0)
+            mention = asyncio.create_task(scheduler.submit('group:1', lambda: record('mention'), priority=True))
+            async def record(label):
+                seen.append(label)
+            await asyncio.sleep(0)
+            if aged:
+                scheduler._queues['group:2'][0].queued_at -= 16
+            gate.set()
+            await asyncio.gather(first, peer, mention)
+            await scheduler.close()
+            self.assertEqual(seen, ['peer', 'mention'] if aged else ['mention', 'peer'])
+
     async def test_round_robin_prevents_hot_scope_starvation(self):
         scheduler = FairChatScheduler(workers=1, per_scope_limit=4)
         await scheduler.start()

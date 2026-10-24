@@ -419,6 +419,10 @@ class PersonaBody(BaseModel):
     expected_version: int | None = None
 
 
+class EffectivePersonaBody(PersonaBody):
+    expected_revision: str | None = None
+
+
 class GrowthBody(BaseModel):
     category: str
     content: str = Field(min_length=1, max_length=2000)
@@ -917,6 +921,30 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"version": version, "effective_persona": state.effective_persona(
             Scope(kind, owner_id), state.get_default_persona("大肥鱼", "")[1],
+        )}
+
+    @app.post('/api/scopes/{kind}/{owner_id}/persona/refine')
+    def refine_persona(kind: str, owner_id: int, _: int = Depends(require_admin)):
+        if native_client is None:
+            raise HTTPException(409, '原生聊天服务未配置，无法调用人设提炼模型')
+        from jmbot.service_rpc import RPCClient
+        scope = Scope(kind, owner_id)
+        return RPCClient(native_client.url, native_client.token, timeout=190).call('persona_draft', 'generate', scope.key)
+
+    @app.put("/api/scopes/{kind}/{owner_id}/persona/effective")
+    def put_effective_persona(kind: str, owner_id: int, body: EffectivePersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+        # The editor shows the persona that is actually in effect (base plus
+        # growth). Saving bakes that text into the scope base and freezes the
+        # growth entries already merged into it, so nothing is applied twice.
+        scope = Scope(kind, owner_id)
+        try:
+            version = state.replace_effective_persona(
+                scope, body.prompt, expected_version=body.expected_version, expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"version": version, "effective_persona": state.effective_persona(
+            scope, state.get_default_persona("大肥鱼", "")[1],
         )}
 
     @app.post("/api/scopes/{kind}/{owner_id}/growth")

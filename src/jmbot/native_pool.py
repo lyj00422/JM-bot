@@ -1,4 +1,4 @@
-"""Bounded native MaiBot processes. Each scope owns an entire native data root."""
+"""One native runtime per account, carrying independent session grants."""
 from __future__ import annotations
 
 import asyncio
@@ -13,21 +13,29 @@ MAIBOT_COMMIT = 'c602a2780f4f4dda4a6be46d67abc1cfb1ad420c'
 
 
 class NativePool:
-    def __init__(self, root, *, limit=4):
+    def __init__(self, root, *, limit=1):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.limit = limit
-        if not 1 <= limit <= 32:
-            raise ValueError('native instance limit must be between 1 and 32')
+        self.limit = 1
         self.processes = {}
         self.lock = asyncio.Lock()
         self.errors = {}
-        self.waiting = {}
+        self.scopes = {}
+
+    def runtime_identity(self, identity):
+        return ':'.join(identity.split(':')[:2]) + ':runtime'
+
+    def directory(self, identity):
+        return self.root / self.runtime_identity(identity).replace(':', '_')
 
     async def deliver(self, identity, event, context):
+        scope_identity = identity
+        identity = self.runtime_identity(identity)
         async with self.lock:
             entry = self.processes.get(identity)
-            fingerprint = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
+            # Content and scoped grants refresh without restarting other chats.
+            fingerprint_context = {key: context[key] for key in ('account', 'gateway', 'write_barrier') if key in context}
+            fingerprint = hashlib.sha256(json.dumps(fingerprint_context, sort_keys=True).encode()).hexdigest()
             if entry and (entry['process'].returncode is not None or entry['fingerprint'] != fingerprint):
                 await self._stop(identity)
                 entry = None
@@ -35,21 +43,8 @@ class NativePool:
                 previous = self.errors.get(identity)
                 if previous and time.time() - previous['at'] < 30:
                     raise RuntimeError('native startup cooling down; inspect scoped worker log')
-                # Queue admission here; the supervisor rotates workers with a
-                # bounded wait rather than starting an unbounded fork storm.
                 if len(self.processes) >= self.limit:
-                    from jmbot.core.ingress import classify
-                    route = classify(event)
-                    if identity not in self.waiting and len(self.waiting) >= 64:
-                        raise RuntimeError('native admission queue full')
-                    pending = self.waiting.setdefault(identity, [])
-                    if len(pending) >= 8:
-                        passive = next((i for i, (_, old, _) in enumerate(pending) if not classify(old).direct), None)
-                        if passive is None:
-                            raise RuntimeError('native scope admission queue full')
-                        del pending[passive]
-                    pending.append((time.time(), event, context))
-                    return
+                    raise RuntimeError('single-account runtime capacity reached')
                 source = Path(os.environ['JM_BOT_MAIBOT_SOURCE']).resolve()
                 import subprocess
                 commit = await asyncio.to_thread(subprocess.check_output, ['git', '-C', str(source), 'rev-parse', 'HEAD'])
@@ -58,7 +53,10 @@ class NativePool:
                 dirty = await asyncio.to_thread(subprocess.check_output, ['git', '-C', str(source), 'diff', 'HEAD', '--', 'src', 'main.py', 'pyproject.toml', 'uv.lock'])
                 if dirty or hashlib.sha256((source / 'uv.lock').read_bytes()).hexdigest() != '71069a89a2eb84ded3cd72814de45f70e4fd02970bb0aeb532009006c4744b9d':
                     raise RuntimeError('MaiBot source or dependency lock has local modifications')
-                directory = self.root / identity.replace(':', '_')
+                directory = self.directory(identity)
+                legacy_prefix = identity.split(':')[0] + '_' + identity.split(':')[1]
+                if not directory.exists() and any(path.is_dir() for kind in ('group', 'private') for path in self.root.glob(legacy_prefix + '_' + kind + '_*')):
+                    raise RuntimeError('legacy native data requires offline scope migration before starting')
                 directory.mkdir(parents=True, exist_ok=True)
                 if os.environ.get('JM_BOT_MAIBOT_TERMS_ACCEPTED') != MAIBOT_COMMIT:
                     raise RuntimeError('operator must review upstream EULA/privacy and acknowledge the locked commit')
@@ -68,7 +66,8 @@ class NativePool:
                     if stale.is_file():
                         stale.unlink()
                 context_file = directory / 'jmbot-context.json'
-                context_file.write_text(json.dumps(context, ensure_ascii=False), encoding='utf-8')
+                runtime_context = {**context, 'runtime_token': os.urandom(32).hex()}
+                context_file.write_text(json.dumps(runtime_context, ensure_ascii=False), encoding='utf-8')
                 if os.name != 'nt':
                     context_file.chmod(0o600)
                 env = os.environ.copy()
@@ -86,21 +85,44 @@ class NativePool:
                         cwd=source, env=env, stdin=asyncio.subprocess.PIPE, stdout=log, stderr=log, limit=1024 * 1024, start_new_session=os.name != 'nt')
                 finally:
                     log.close()
-                entry = {'process': process, 'fingerprint': fingerprint, 'last_event': time.time(), 'started': time.time(), 'revision': context['revision'], 'token': context['token']}
+                entry = {'process': process, 'fingerprint': fingerprint, 'last_event': time.time(), 'started': time.time(),
+                         'revision': context['revision'], 'persona_revision': context.get('persona_revision'),
+                         'token': runtime_context['runtime_token']}
                 self.processes[identity] = entry
                 # The bounded stdin pipe queues startup input. Readiness is
                 # supervised independently so a cold scope cannot hold all peers.
             process = entry['process']
-            frame = json.dumps(event, ensure_ascii=False).encode() + b'\n'
+            frame = json.dumps({'event': event, 'context': context}, ensure_ascii=False).encode() + b'\n'
             if len(frame) > 1024 * 1024:
                 raise ValueError('native event exceeds frame limit')
+            (self.root / identity.replace(':', '_') / 'idle').unlink(missing_ok=True)
+            previous_scope = self.scopes.get(scope_identity)
+            self.scopes[scope_identity] = {'context': context, 'last_event': time.time()}
             process.stdin.write(frame)
-            await asyncio.wait_for(process.stdin.drain(), 5)
+            try:
+                await asyncio.wait_for(process.stdin.drain(), 5)
+            except BaseException:
+                if previous_scope is None:
+                    self.scopes.pop(scope_identity, None)
+                else:
+                    self.scopes[scope_identity] = previous_scope
+                raise
             entry['last_event'] = time.time()
 
     async def stop(self, identity):
         async with self.lock:
             await self._stop(identity)
+
+    async def stop_if_idle(self, identity):
+        """Refresh content only after rechecking idleness under the delivery lock."""
+        async with self.lock:
+            entry = self.processes.get(identity)
+            if not entry or time.time() - entry['last_event'] <= 5:
+                return False
+            if not (self.root / identity.replace(':', '_') / 'idle').exists():
+                return False
+            await self._stop(identity)
+            return True
 
     async def _stop(self, identity):
         entry = self.processes.get(identity)
@@ -142,11 +164,10 @@ class NativePool:
         self.processes.pop(identity, None)
 
     async def close(self):
-        self.waiting.clear()
         for identity in list(self.processes):
             await self.stop(identity)
 
     def snapshot(self):
-        return {'limit': self.limit, 'waiting': {key: len(rows) for key, rows in self.waiting.items()}, 'instances': {key: {'pid': item['process'].pid,
+        return {'limit': self.limit, 'sessions': {key: {'last_event': value['last_event']} for key, value in self.scopes.items()}, 'instances': {key: {'pid': item['process'].pid,
                 'running': item['process'].returncode is None, 'ready': (self.root / key.replace(':', '_') / 'ready').exists(), 'last_event': item['last_event']}
                 for key, item in self.processes.items()}, 'errors': self.errors}

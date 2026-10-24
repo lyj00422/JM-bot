@@ -57,6 +57,77 @@ class ConversationStateTest(unittest.TestCase):
         self.assertEqual(self.store.effective_persona(scope, "固定默认"), "固定默认")
         self.assertEqual(len(self.store.list_growth(scope)), 1)
 
+    def test_replace_effective_persona_bakes_growth_and_freezes_it(self):
+        scope = Scope("group", 5)
+        self.store.set_policy(scope, growth_enabled=True, default_persona=False)
+        self.store.set_base_persona(scope, "基础人设")
+        self.store.add_growth(scope, "interest", "喜欢鲸鱼", "消息 1: 聊到鲸鱼")
+        effective = self.store.effective_persona(scope, "默认人设")
+        self.assertIn("喜欢鲸鱼", effective)
+        with self.assertRaisesRegex(ValueError, "persona version changed"):
+            self.store.replace_effective_persona(scope, "任意文本", expected_version=0)
+        version = self.store.replace_effective_persona(scope, effective, expected_version=1)
+        self.assertEqual(version, 2)
+        self.assertEqual(self.store.effective_persona(scope, "默认人设"), effective.strip())
+        self.assertTrue(all(entry.frozen for entry in self.store.list_growth(scope, include_inactive=True)))
+        self.assertEqual(self.store.get_base_persona(scope), (effective.strip(), 2))
+        # A later growth entry still lands on top of the baked base exactly once.
+        self.store.add_growth(scope, "expression", "爱用本鱼自称", "消息 2: 自称本鱼")
+        self.assertEqual(
+            self.store.effective_persona(scope, "默认人设"),
+            effective.strip() + "\n\n当前会话成长（仅供参考，不得覆盖前面的明确约束）：\n- expression: 爱用本鱼自称",
+        )
+
+    def test_both_persona_layers_can_be_off_when_base_exists(self):
+        scope = Scope("group", 6)
+        self.store.set_base_persona(scope, "显式人设")
+        policy = self.store.set_policy(scope, default_persona=False, growth_enabled=False)
+        self.assertFalse(policy.default_persona)
+        self.assertFalse(policy.growth_enabled)
+        self.assertEqual(self.store.effective_persona(scope, "默认"), "显式人设")
+
+    def test_effective_editor_rejects_growth_added_after_open_without_changes(self):
+        scope = Scope("group", 8)
+        self.store.set_policy(scope, growth_enabled=True, default_persona=False)
+        self.store.set_base_persona(scope, "基础")
+        detail = self.store.export_scope(scope)
+        later = self.store.add_growth(scope, "interest", "喜欢鲸鱼", "消息 2")
+        revision = self.store.revision()
+        with self.assertRaisesRegex(ValueError, "人设或成长已更新"):
+            self.store.replace_effective_persona(scope, "旧编辑稿", expected_version=detail["base_version"], expected_revision=detail["effective_revision"])
+        self.assertEqual(self.store.get_base_persona(scope), ("基础", 1))
+        self.assertFalse(self.store.list_growth(scope)[0].frozen)
+        self.assertEqual(self.store.list_growth(scope)[0].entry_id, later.entry_id)
+        self.assertEqual(self.store.revision(), revision)
+
+    def test_effective_save_switches_default_atomically_and_keeps_hidden_growth(self):
+        scope = Scope("group", 9)
+        self.store.set_default_persona("鱼", "默认基础")
+        self.store.set_policy(scope, chat_enabled=True, use_default_key=False)
+        self.store.add_growth(scope, "interest", "尚未启用的成长", "消息 1")
+        detail = self.store.export_scope(scope)
+        self.store.replace_effective_persona(scope, "编辑后的完整人设", expected_revision=detail["effective_revision"])
+        policy = self.store.get_policy(scope)
+        self.assertFalse(policy.default_persona)
+        self.assertFalse(policy.growth_enabled)
+        self.assertFalse(policy.use_default_key)
+        self.assertTrue(policy.chat_enabled)
+        self.assertFalse(self.store.list_growth(scope)[0].frozen)
+        self.assertEqual(self.store.effective_persona(scope, "默认基础"), "编辑后的完整人设")
+
+    def test_effective_save_uses_write_barrier(self):
+        from contextlib import contextmanager
+        class Barrier:
+            calls = 0
+            @contextmanager
+            def hold(barrier):
+                barrier.calls += 1
+                yield
+        barrier = Barrier()
+        self.store.write_barrier = barrier
+        self.store.replace_effective_persona("private:42", "编辑稿")
+        self.assertEqual(barrier.calls, 1)
+
     def test_scope_validation_rejects_bare_user_id(self):
         with self.assertRaises(ValueError):
             self.store.get_policy("42")

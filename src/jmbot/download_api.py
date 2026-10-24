@@ -1,7 +1,7 @@
 """Download-owned queue and constrained QQ transport; no chat decision logic."""
 import asyncio
 import base64
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from jmbot.business_api import DownloadControl
 from jmbot.service_rpc import mount_rpc
 
@@ -67,8 +67,20 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
             async def invoke():
                 return await get_bot(str(account)).call_api('get_image', file=file)
             result = asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(15)
-            path = Path(result.get('file', ''))
-            import os
+            raw_path = result.get('file', '')
+            if not isinstance(raw_path, str) or not raw_path or '..' in PurePosixPath(raw_path).parts:
+                raise ValueError('invalid NapCat image path')
+            path = Path(raw_path)
+            # get_image returns a container path when NapCat runs in Docker.
+            # Translate only the operator-configured bind mount, then enforce
+            # the host root again (including symlink resolution).
+            container_root = os.environ.get('JM_BOT_NAPCAT_MEDIA_CONTAINER_ROOT')
+            host_root = os.environ.get('JM_BOT_NAPCAT_MEDIA_HOST_ROOT')
+            if container_root and host_root:
+                container_path = PurePosixPath(raw_path)
+                mount = PurePosixPath(container_root)
+                if container_path.is_relative_to(mount):
+                    path = Path(host_root).joinpath(*container_path.relative_to(mount).parts)
             root = Path(os.environ.get('JM_BOT_NAPCAT_MEDIA_ROOT', '/opt/napcat')).resolve()
             if not path.resolve().is_relative_to(root) or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
                 raise ValueError('media path outside permitted NapCat root')

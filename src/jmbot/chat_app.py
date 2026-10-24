@@ -66,9 +66,9 @@ def create_chat_app():
         state.set_default_persona(role.name, role.system_prompt)
     admins = RemoteStore(RPCClient(os.environ.get('JM_BOT_ADMIN_SERVICE_URL', 'http://127.0.0.1:8081'), token), 'admin')
     download = RPCClient(os.environ.get('JM_BOT_DOWNLOAD_SERVICE_URL', 'http://127.0.0.1:8080'), token)
-    pool = NativePool(data / 'instances', limit=int(os.environ.get('JM_BOT_NATIVE_INSTANCE_LIMIT', '4')))
+    pool = NativePool(data / 'instances')
     inbox = IngressQueue(maxsize=128)
-    scheduler = FairChatScheduler(workers=int(os.environ.get('JM_BOT_MODEL_WORKERS', '4')), per_scope_limit=8)
+    scheduler = FairChatScheduler(workers=1, per_scope_limit=8)
     grants = {}
     failures = {}
     provider_limits = {}
@@ -100,7 +100,7 @@ def create_chat_app():
             raise ValueError('provider route missing or invalid')
         return value
 
-    async def generate_growth(scope, prompt):
+    async def generate_growth(scope, prompt, *, max_tokens=600, require_growth=True):
         import httpx
         key, provider = resolve(scope)
         route = routes(provider)
@@ -111,20 +111,26 @@ def create_chat_app():
             semaphore = provider_limits.setdefault(provider, asyncio.Semaphore(2))
             task_semaphore = task_limits.setdefault((provider, 'learner', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
             async with semaphore, task_semaphore:
-                if not state.permitted(scope) or not state.get_policy(scope).growth_enabled:
+                if not state.permitted(scope) or (require_growth and not state.get_policy(scope).growth_enabled):
                     raise ValueError('growth permission revoked')
                 async with httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
                     result = await client.post(route['base_url'].rstrip('/') + '/chat/completions',
                         headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'temperature': 0,
-                        'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 600})
+                        'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': max_tokens})
                     result.raise_for_status()
                     if not state.permitted(scope) or resolve(scope) != (key, provider):
                         raise ValueError('growth permission or credential changed')
                     return {'content': result.json()['choices'][0]['message']['content'], 'provider': provider, 'model': binding['model']}
-        return await scheduler.submit('growth:' + scope, execute, passive=True, timeout=60)
+        return await scheduler.submit('qq:' + os.environ.get('JM_BOT_QQ_ACCOUNT', '') + ':' + scope, execute, passive=False, timeout=180)
 
     from jmbot.growth_worker import GrowthWorker
-    growth = GrowthWorker(state, generate_growth)
+    from jmbot.persona_refinery import PersonaRefinery
+    refinery = PersonaRefinery(state, generate_growth)
+    growth = GrowthWorker(state, generate_growth, refinery=refinery)
+
+    class PersonaDraft:
+        def generate(self, scope):
+            return asyncio.run_coroutine_threadsafe(refinery.draft(scope), app.state.loop).result(185)
 
     async def send(event, message):
         return await asyncio.to_thread(download.call, 'qq', 'send_configuration', str(event['self_id']), classify(event).scope, message)
@@ -153,7 +159,7 @@ def create_chat_app():
                     continue
                 config = routes(provider)
                 await asyncio.to_thread(state.record_source, route.scope, str(event.get('message_id', '')), str(event['user_id']), text_of(event), event.get('time', time.time()))
-                revision = state.activation_revision(route.scope)
+                revision = state.authorization_revision(route.scope)
                 policy = state.get_policy(route.scope)
                 credential_digest = hashlib.sha256(key.encode()).hexdigest()
                 grant_key = identity + ':' + str(revision) + ':' + provider + ':' + credential_digest
@@ -166,7 +172,12 @@ def create_chat_app():
                            'token': grant['token'], 'revision': revision,
                            'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
                            'persona': state.effective_persona(route.scope, state.get_default_persona('', '')[1]),
-                           'growth_enabled': policy.growth_enabled, 'tasks': config['tasks']}
+                           'persona_revision': state.persona_revision(route.scope),
+                           'growth_enabled': policy.growth_enabled, 'tasks': config['tasks'],
+                           'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
+                           'emoji_mode': os.environ.get('JM_BOT_EMOJI_MODE', 'selector')}
+                if route.direct:
+                    grant['priority_until'] = time.monotonic() + 20
                 context['write_barrier'] = str((data / 'policy-write.lock').resolve())
                 await pool.deliver(identity, event, context)
                 if policy.growth_enabled:
@@ -181,37 +192,15 @@ def create_chat_app():
     async def supervise():
         while True:
             for identity, entry in list(pool.processes.items()):
-                scope = identity.split(':', 2)[2]
-                ready = (pool.root / identity.replace(':', '_') / 'ready').exists()
+                ready = (pool.directory(identity) / 'ready').exists()
                 if entry['process'].returncode is not None or not ready and time.time() - entry['started'] > 120:
                     pool.errors[identity] = {'type': 'startup_failed', 'at': time.time()}
                     await pool.stop(identity)
                     continue
-                if entry['process'].returncode is not None or entry.get('revision') != state.activation_revision(scope) or not state.permitted(scope) or time.time() - entry['last_event'] > int(os.environ.get('JM_BOT_NATIVE_IDLE_SECONDS', '900')):
-                    await pool.stop(identity)
-            # Prefer an idle boundary, then interrupt the oldest worker after
-            # a bounded wait so hot scopes cannot monopolize every slot.
-            for identity, pending in list(pool.waiting.items()):
-                pending[:] = [item for item in pending if time.time() - item[0] < 90 and state.permitted(identity.split(':', 2)[2])]
-                if not pending:
-                    pool.waiting.pop(identity, None)
-                    continue
-                if len(pool.processes) >= pool.limit:
-                    victim = next((key for key, entry in pool.processes.items() if time.time() - entry['last_event'] > 5 and (pool.root / key.replace(':', '_') / 'idle').exists()), None)
-                    if not victim and time.time() - pending[0][0] > 30:
-                        victim = min(pool.processes, key=lambda key: pool.processes[key]['started'])
-                    if victim:
-                        await pool.stop(victim)
-                if len(pool.processes) < pool.limit:
-                    pool.waiting.pop(identity, None)
-                    for _, event, context in pending:
-                        if context['revision'] == state.activation_revision(context['scope']):
-                            try:
-                                await pool.deliver(identity, event, context)
-                            except Exception as exc:
-                                failures[identity] = {'type': type(exc).__name__, 'at': time.time()}
+            # Session policy/content is refreshed through the authenticated
+            # context endpoint, never by terminating another group's runtime.
             for key, grant in list(grants.items()):
-                if grant['revision'] != state.activation_revision(grant['scope']):
+                if grant['revision'] != state.authorization_revision(grant['scope']):
                     grants.pop(key, None)
             try:
                 await asyncio.to_thread(admins.heartbeat, 'jmbot-chat', True, 'native instances=' + str(len(pool.processes)))
@@ -226,14 +215,15 @@ def create_chat_app():
         from jmbot.native_control import NativeControl
         mount_rpc(app, token=token, ledger=data / 'rpc.sqlite3', targets={
             'state': state, 'credentials': CredentialView(credentials, barrier, store_lock), 'stickers': stickers,
-            'routes': model_routes, 'draft': app.state.sticker_draft, 'native': NativeControl(pool, loop, state), 'ingress': Ingress(loop, inbox)}, allowed={
+            'routes': model_routes, 'draft': app.state.sticker_draft, 'persona_draft': PersonaDraft(), 'native': NativeControl(pool, loop, state), 'ingress': Ingress(loop, inbox)}, allowed={
+            'persona_draft': {'generate'},
             'draft': {'generate'},
             'routes': {'read', 'write'},
             'state': STATE_METHODS, 'credentials': CREDENTIAL_METHODS,
             'native': {'status', 'memory'},
             'stickers': {'template_bytes', 'preview_bytes', 'confirm_preview', 'catalog', 'review'}, 'ingress': {'accept'}})
         await scheduler.start()
-        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run())]
+        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run()), asyncio.create_task(growth.maintain())]
         try:
             yield
         finally:
@@ -250,10 +240,11 @@ def create_chat_app():
     def grant_for(request):
         bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
         grant = next((item for item in grants.values() if secrets.compare_digest(item['token'], bearer)), None)
-        if not grant or not state.permitted(grant['scope']) or state.activation_revision(grant['scope']) != grant['revision']:
+        if not grant or not state.permitted(grant['scope']) or state.authorization_revision(grant['scope']) != grant['revision']:
             raise HTTPException(403, 'scope policy changed or access revoked')
-        worker = pool.processes.get(grant['identity'])
-        if not worker or worker.get('stopping') or worker.get('token') != bearer or worker['process'].returncode is not None:
+        worker = pool.processes.get(pool.runtime_identity(grant['identity']))
+        delivered = pool.scopes.get(grant['identity'], {}).get('context', {})
+        if not worker or worker.get('stopping') or delivered.get('token') != bearer or worker['process'].returncode is not None:
             raise HTTPException(403, 'native worker lease expired')
         key, provider = resolve(grant['scope'])
         if not key or provider != grant['provider'] or hashlib.sha256(key.encode()).hexdigest() != grant['credential_digest']:
@@ -264,6 +255,24 @@ def create_chat_app():
     async def native_status(request: Request):
         grant_for(request)
         return {'ok': True}
+
+    @app.get('/native/runtime-status')
+    async def runtime_status(request: Request):
+        bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
+        if not any(item['process'].returncode is None and secrets.compare_digest(item['token'], bearer) for item in pool.processes.values()):
+            raise HTTPException(403, 'runtime lease expired')
+        return {'ok': True}
+
+    @app.get('/native/context')
+    async def native_context(request: Request):
+        grant, _ = grant_for(request)
+        context = dict(pool.scopes[grant['identity']]['context'])
+        context.update(persona=state.effective_persona(grant['scope'], state.get_default_persona('', '')[1]),
+                       persona_revision=state.persona_revision(grant['scope']),
+                       growth_enabled=state.get_policy(grant['scope']).growth_enabled,
+                       tasks=routes(grant['provider'])['tasks'],
+                       route_identity=hashlib.sha256((grant['provider'] + ':' + routes(grant['provider'])['base_url']).encode()).hexdigest()[:16])
+        return context
 
     @app.get('/health')
     async def health():
@@ -327,9 +336,13 @@ def create_chat_app():
         expected = 'embeddings' if task in {'embedding', 'image_embedding'} else 'audio/transcriptions' if task == 'voice' else 'chat/completions'
         if operation != expected:
             raise HTTPException(403, 'task operation mismatch')
-        payload = await request.body()
-        if len(payload) > 16 * 1024 * 1024:
-            raise HTTPException(413)
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > 4 * 1024 * 1024:
+                raise HTTPException(413, 'model request exceeds memory budget')
+            chunks.append(chunk)
+        payload = b''.join(chunks)
         try:
             body = json.loads(payload)
         except ValueError:
@@ -337,26 +350,36 @@ def create_chat_app():
         body['model'] = binding['model']
         body['stream'] = False
         for message in body.get('messages', []):
-            if isinstance(message.get('content'), list) and any(part.get('type') in {'image_url', 'input_image'} for part in message['content'] if isinstance(part, dict)) and task != 'vlm':
+            if isinstance(message.get('content'), list) and any(part.get('type') in {'image_url', 'input_image'} for part in message['content'] if isinstance(part, dict)) and not binding.get('visual', task == 'vlm'):
                 raise HTTPException(409, 'image input requires an explicit vision task')
         async def execute():
             grant_for(request)
             semaphore = provider_limits.setdefault(grant['provider'], asyncio.Semaphore(2))
             task_semaphore = task_limits.setdefault((grant['provider'], task, binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
             async with semaphore, task_semaphore:
+                grant_for(request)
                 async with httpx.AsyncClient(timeout=60, follow_redirects=False, trust_env=False, proxy=chat_proxy()) as client:
                     try:
-                        response = await client.post(route['base_url'].rstrip('/') + '/' + operation,
-                                                     headers={'Authorization': 'Bearer ' + key}, json=body)
+                        async with client.stream('POST', route['base_url'].rstrip('/') + '/' + operation,
+                                                 headers={'Authorization': 'Bearer ' + key}, json=body) as response:
+                            if response.status_code >= 400:
+                                raise HTTPException(502, 'model provider rejected task')
+                            parts, received = [], 0
+                            async for part in response.aiter_bytes():
+                                received += len(part)
+                                if received > 4 * 1024 * 1024:
+                                    raise HTTPException(502, 'model response exceeds memory budget')
+                                parts.append(part)
+                            content = b''.join(parts)
                     except httpx.HTTPError:
                         raise HTTPException(502, 'model provider unavailable') from None
             grant_for(request)
             if response.status_code >= 400:
                 raise HTTPException(502, 'model provider rejected task')
             # Return model protocol data only; never forward provider headers/errors.
-            return Response(response.content, media_type='application/json')
+            return Response(content, media_type='application/json')
         try:
-            result = await scheduler.submit(grant['identity'], execute, passive=task in {'memory', 'mid_memory', 'learner', 'emoji'}, timeout=90)
+            result = await scheduler.submit(grant['identity'], execute, priority=time.monotonic() < grant.get('priority_until', 0), timeout=90)
             if result is None:
                 raise HTTPException(429, 'background model task superseded')
             return result
@@ -372,7 +395,7 @@ def create_chat_app():
                 if not state.permitted(scope):
                     raise ValueError('scope not permitted')
                 key, provider = resolve(scope)
-                revision = state.activation_revision(scope)
+                revision = state.authorization_revision(scope)
                 route = routes(provider)
                 binding = route['tasks'].get('vlm', {})
                 if not key or not binding.get('enabled', False) or not binding.get('model'):
@@ -390,7 +413,7 @@ def create_chat_app():
                         response = await client.post(route['base_url'].rstrip('/') + '/chat/completions', headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'messages': [{'role': 'user', 'content': content}], 'max_tokens': 3000, 'temperature': 0})
                         response.raise_for_status()
                         candidates = json.loads(response.json()['choices'][0]['message']['content'])
-                    if not state.permitted(scope) or state.activation_revision(scope) != revision or resolve(scope) != (key, provider):
+                    if not state.permitted(scope) or state.authorization_revision(scope) != revision or resolve(scope) != (key, provider):
                         raise ValueError('scope or credential changed during draft generation')
                     if not isinstance(candidates, list) or len(candidates) != len(data['stickers']):
                         raise ValueError('invalid semantic draft')

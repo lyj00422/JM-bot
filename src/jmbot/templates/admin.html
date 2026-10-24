@@ -97,7 +97,7 @@
         <section class="section" id="page-friends"><h1>私聊监控</h1><div class="panel"><div class="row"><label>搜索<input id="monitor-friend-search" placeholder="QQ / 昵称 / 备注"></label><button id="refresh-friends">刷新</button></div><div id="monitor-friend-list" class="muted">加载中…</div></div></section>
         <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
         <section class="section" id="page-credentials"><h1>API Key</h1><p class="muted">Key 保存后只显示配置状态。会话使用默认 Key 时，保存独立 Key 会切换到独立配置。</p><div id="credential-list"></div><div class="panel"><h2>设置默认 Key</h2><div class="grid"><label>默认服务商<select id="default-provider"><option value="ds_school">学校</option><option value="ds_official">DS 官方</option><option value="glm_school">学校 GLM</option><option value="glm_official">GLM 官方</option><option value="kimi_school">学校 Kimi</option><option value="kimi_official">Kimi 官方</option><option value="qwen_school">学校 Qwen</option><option value="qwen_official">Qwen 官方</option></select></label><label>默认 API Key<input id="default-key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-default-key" class="primary">保存默认 Key</button></p></div><div class="panel"><h2>设置会话 Key</h2><div class="grid"><label>会话类型<select id="key-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="key-owner" inputmode="numeric"></label><label>服务商<select id="key-provider"><option value="ds_official">DS 官方</option><option value="ds_school">学校 DS</option><option value="glm_official">GLM 官方</option><option value="glm_school">学校 GLM</option><option value="kimi_official">Kimi 官方</option><option value="kimi_school">学校 Kimi</option><option value="qwen_official">Qwen 官方</option><option value="qwen_school">学校 Qwen</option></select></label><label>API Key<input id="key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-key" class="primary">保存 Key</button></p></div></section>
-        <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话开关</h2><p class="muted">按群聊/私聊控制「使用默认人设」和「角色成长」；两者互斥，始终保留一个开启。</p><div class="row"><label>分类<select id="persona-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="persona-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="persona-scope-list" class="muted">加载中…</div><p><button id="refresh-persona-scopes">刷新会话列表</button></p></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
+        <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话开关</h2><p class="muted">按群聊/私聊控制「使用默认人设」和「角色成长」；有独立基础人设时，两项都可关闭；重新开启成长会保留现有人设。</p><div class="row"><label>分类<select id="persona-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="persona-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="persona-scope-list" class="muted">加载中…</div><p><button id="refresh-persona-scopes">刷新会话列表</button></p></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
         <section class="section" id="page-download-perms"><h1>下载会话权限</h1><div class="panel"><div class="grid"><label>类型<select id="download-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="download-owner" inputmode="numeric"></label></div><p><button id="add-download-scope" class="primary">添加会话</button></p><div class="row"><label>分类<select id="download-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="download-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="download-status"></div></div></section>
         <section class="section" id="page-download-queue"><h1>下载队列</h1><div class="panel"><div class="row"><button id="refresh-queue">刷新队列</button><button id="clear-queue" class="danger">清空待处理</button><button id="clear-finished" class="danger">清空已完成</button><label class="check"><input id="show-finished" type="checkbox">显示已完成</label></div><div id="queue-actions" class="muted"></div><div id="download-queue"></div></div></section>
         <section class="section" id="page-download-help"><h1>下载帮助文本</h1><div class="panel"><label>帮助文本<textarea id="help-text"></textarea></label><button id="save-help" class="primary">保存帮助文本</button></div></section>
@@ -152,7 +152,7 @@
       const kind = $("scope-kind").value, owner = $("scope-owner").value;
       try {
         const data = await api(`/api/scopes/${kind}/${owner}`);
-        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-chat-blacklist" type="checkbox" ${data.policy.chat_blacklisted ? "checked" : ""}>聊天黑名单</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-key" type="checkbox" ${data.policy.use_default_key ? "checked" : ""}>使用默认 API Key</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><label>独立基础人设<textarea id="base-persona">${escapeHtml(data.base_persona || "")}</textarea></label><p><button id="save-base-persona">保存基础人设</button></p><h2>最终生效人设</h2><pre>${escapeHtml(data.effective_persona || "")}</pre><h2>长期记忆</h2><pre>${escapeHtml(JSON.stringify(data.memories, null, 2))}</pre><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：该会话每积累到 3 条以上真实消息，learner 模型会从中提炼至多 1 条成长，自动生效并叠加到会话人设。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
+        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-chat-blacklist" type="checkbox" ${data.policy.chat_blacklisted ? "checked" : ""}>聊天黑名单</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-key" type="checkbox" ${data.policy.use_default_key ? "checked" : ""}>使用默认 API Key</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><label>独立基础人设<textarea id="base-persona">${escapeHtml(data.base_persona || "")}</textarea></label><p><button id="save-base-persona">保存基础人设</button></p><h2>最终生效人设</h2><pre>${escapeHtml(data.effective_persona || "")}</pre><h2>长期记忆</h2><pre>${escapeHtml(JSON.stringify(data.memories, null, 2))}</pre><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：当前 learner 从最近消息中提炼成长，通过验证后自动生效。冻结条目不再叠加；解冻已固化进基础人设的条目会再次叠加。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
         const list = $("growth-entries");
         data.growth.forEach((entry) => {
           const row = document.createElement("div"); row.className = "item";
@@ -472,8 +472,8 @@
     async function switchPersonaMode(kind, owner, mode, input) {
       try {
         if (!input.checked) {
-          input.checked = true;
-          note("「使用默认人设」和「角色成长」必须保留一个开启；要切换请勾选另一项。");
+          await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify({ [mode === "default" ? "default_persona" : "growth_enabled"]: false }) });
+          await loadPersonaScopes();
           return;
         }
         if (mode === "default") {
@@ -484,24 +484,23 @@
           const existing = String(detail.base_persona || "").trim();
           if (!existing) {
             await api(`/api/scopes/${kind}/${owner}/persona`, { method: "PUT", body: JSON.stringify({ prompt: GROWTH_PERSONA, expected_version: detail.base_version ?? 0 }) });
-          } else if (existing !== GROWTH_PERSONA.trim()) {
-            if (!confirm("该会话已有自己的基础人设。开启角色成长会把它替换成「可成长人设」底稿，确定继续？")) {
-              input.checked = false;
-              return;
-            }
-            await api(`/api/scopes/${kind}/${owner}/persona`, { method: "PUT", body: JSON.stringify({ prompt: GROWTH_PERSONA, expected_version: detail.base_version ?? 0 }) });
           }
           await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify({ growth_enabled: true, default_persona: false }) });
-          note(`${kind === "group" ? "群聊" : "私聊"} ${owner}：已开启角色成长，并载入基础可成长人设`);
+          note(`${kind === "group" ? "群聊" : "私聊"} ${owner}：已开启角色成长，保留现有人设`);
         }
         await loadPersonaScopes();
       } catch (error) { note(error.message); await loadPersonaScopes(); }
     }
     async function openPersonaEditor(kind, owner, editor) {
+      if (editor.dataset.refining === '1') return;
+      editor.dataset.refining = '1';
+      editor.hidden = false;
+      editor.textContent = '正在调用模型提炼人设，请稍候…当前人设仍然生效。';
       try {
-        const detail = await api(`/api/scopes/${kind}/${owner}`);
+        const draft = await api(`/api/scopes/${kind}/${owner}/persona/refine`, { method: 'POST', body: '{}' });
+        editor.textContent = '';
         if (!editor.firstChild) {
-          const area = document.createElement("textarea"); area.rows = 8;
+          const area = document.createElement("textarea"); area.rows = 14;
           const actions = document.createElement("div"); actions.className = "row";
           const save = document.createElement("button"); save.className = "primary"; save.textContent = "保存人设";
           const cancel = document.createElement("button"); cancel.textContent = "取消";
@@ -512,7 +511,7 @@
           save.onclick = async () => {
             save.disabled = true;
             try {
-              await api(`/api/scopes/${kind}/${owner}/persona`, { method: "PUT", body: JSON.stringify({ prompt: area.value, expected_version: Number(area.dataset.version || 0) }) });
+              await api(`/api/scopes/${kind}/${owner}/persona/effective`, { method: "PUT", body: JSON.stringify({ prompt: area.value, expected_version: Number(area.dataset.version || 0), expected_revision: area.dataset.revision }) });
               status.textContent = "已保存，立即生效";
               await loadPersonaScopes();
             } catch (error) { status.textContent = error.message; }
@@ -520,11 +519,16 @@
           };
         }
         const area = editor.querySelector("textarea");
-        area.value = String(detail.base_persona || "");
-        area.dataset.version = String(detail.base_version ?? 0);
-        editor.querySelector("span").textContent = detail.base_persona ? "当前会话人设（保存后生效）" : "当前未设置：留空则继承默认人设";
+        const merged = draft.growth_count;
+        area.value = draft.persona;
+        area.dataset.version = String(draft.base_version);
+        area.dataset.revision = draft.effective_revision;
+        editor.querySelector("span").textContent = merged
+          ? `已提炼 ${merged} 条成长，可直接保存或修改；保存后以此继续成长。${(draft.notes || []).join('；')}`
+          : "已提炼人设，可直接保存或修改；保存后以此继续成长";
         editor.hidden = false;
-      } catch (error) { note(error.message); }
+      } catch (error) { editor.textContent = `提炼失败：${error.message}。原人设未改变，请重试。`; note(error.message); }
+      finally { editor.dataset.refining = '0'; }
     }
     $("refresh-persona-scopes").onclick = () => { rosterCache = null; loadPersonaScopes(); };
     $("persona-kind-filter").onchange = loadPersonaScopes;

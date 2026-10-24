@@ -49,8 +49,11 @@ class ModelRoutes:
             if not isinstance(tasks, dict) or set(tasks) - set(TASKS):
                 raise ValueError('invalid task bindings')
             for name, binding in tasks.items():
-                if not isinstance(binding, dict) or set(binding) - {'model', 'enabled', 'concurrency', 'dimension', 'image_embedding_input', 'image_embedding_body'}:
+                if not isinstance(binding, dict) or set(binding) - {'model', 'enabled', 'concurrency', 'dimension', 'visual', 'tools', 'image_embedding_input', 'image_embedding_body'}:
                     raise ValueError('invalid task configuration')
+                for capability in ('visual', 'tools'):
+                    if capability in binding and type(binding[capability]) is not bool:
+                        raise ValueError('model capabilities must be boolean')
                 if type(binding.get('enabled', True)) is not bool:
                     raise ValueError('enabled must be boolean')
                 if binding.get('enabled', True) and (not isinstance(binding.get('model'), str) or not 1 <= len(binding['model']) <= 200):

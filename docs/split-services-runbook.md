@@ -10,7 +10,17 @@
 
 将 deploy/model-routes.example.json 复制至指定配置路径，填写真实学校网关和模型名；embedding 维度必须与模型一致。各官方连接分别添加 ds_official、glm_official、kimi_official、qwen_official，不能将学校 Key 当官方 Key。任务不跨服务商借用凭据。planner、replyer、utils 必需；长期记忆需要 memory 和 embedding，缺任一项则停用原生记忆插件。视觉使用 vlm，自动表情识别使用 emoji，未确认能力保持 disabled。图片 embedding 开启时须提供实际供应商协议的 image_embedding_input 或 image_embedding_body 模板。语音传输尚不可用，校验拒绝启用 voice。
 
-每个 QQ 账号/群/私聊使用独立原生进程和完整数据根目录，隔离上游全局 profile、缓存、向量、表情和后台任务。这会占用较多内存，小内存主机先保持实例上限 2。等待队列有界，优先在原生空闲边界轮换；连续忙碌超过等待阈值后终止旧轮次让其他 scope 启动，旧 token 随即失效。具体容量与冷启动延迟由实际主机验收。
+仅启动一个账号的单个 MaiBot 原生进程，各群/私聊使用独立 session、授权令牌、配置与数据库，关闭会合并聊天的 Focus 模式。模型网关只并发执行一个请求，按会话轮转；仅显式 @bot 提权，等待超过 15 秒的会话优先获得机会。热门群可以继续接话，不能持续挤掉其他有待办的会话。原始事件队列最多 128 条、每会话 16 条，过载优先丢弃被动消息；模型队列每会话最多 8 条。默认最多缓存 8 个原生会话，空闲 300 秒回收；没有可安全回收的会话时等待最多 120 秒。没有增加时间禁言。
+
+默认 JM_BOT_EMOJI_MODE=selector：文本 Planner 决定发表情后，由独立视觉子代理看最多 8 张候选并返回编号。emoji 任务启用时必须具备 visual 能力，否则需显式配置 vlm。planner 模式使用原生 show_emoji_list 和 reply.attach_emoji，需要 planner 同时具备 visual、tools 能力；只有单独的 vlm 不够。无效编号拒绝发送，单次最多发送一张图片。自动收藏按来源会话持久记录所有权，群间不共享；全局人工审核种子库仅按显式授权可见。
+
+原生表达和黑话学习随该会话 growth_enabled 开关运行，群友事实进入原生长期记忆，机器人自身稳定变化进入角色成长。memory 和 embedding 显式启用才开启 A_Memorix；图片长期记忆还需要 image_embedding。向量内核按会话串行切换，一次仅驻留一个内核，数据根目录隔离。切换内核可能增加记忆任务等待时间。真实模型能力需使用 scripts/probe_model_capabilities.py 对指定服务商发送合成输入验证，不自动改写配置或借用其他服务商凭据。
+
+每次点击人设编辑都会重新调用 learner 提炼，返回草稿前原人设继续生效；保存后固化为基础人设并冻结已合并成长，历史保留，随后继续自动成长。提炼和保存都检查内容版本，冲突必须重读。角色候选每积累 30 条新消息才生成，每会话至少间隔 30 分钟，最多一条，要求 bot_self 归因、真实引用与近似去重。后台每分钟检查，新增成长达到 8 条或距上次摘要达到 6 小时时调用模型压缩为最多 1600 字的成长摘要，保留历史；有效提示只追加摘要及最近最多 8 条、合计最多 1200 字的新条目。提炼/模型失败保留原数据。
+
+单实例、上下文和队列预算用于降低内存压力，不能代替生产 RSS 与峰值负载验收。后续服务器变更计划可包含 2 GiB swap 缓冲；本轮代码交付不创建 swap、不重启服务、不宣称 OOM 已消除。
+
+自动收藏表情单张大小由 JM_BOT_EMOJI_MAX_SIZE_MB 覆盖；未设置时沿用上游默认 5 MiB。当前 QQ 媒体入口最多接受 8 MiB、3200 万像素，因此可配置为 8。JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES 控制已缓存文件的注册扫描间隔；当前部署为 1 分钟，避免会话轮换时反复等待默认 10 分钟。原生实例启动时重新生成 bot_config.toml，不应只修改实例内的配置文件。此设置不改变注册表情池数量，也不代表媒体获取和自动注册已经成功。
 
 阅读上游 EULA.md 和 PRIVACY.md，再将 JM_BOT_MAIBOT_TERMS_ACCEPTED 设置为锁定 SHA。程序不替使用者自动同意条款。
 
@@ -26,7 +36,7 @@
 
 目标必须是新目录；migrate 同一快照可续跑并返回回执。dry-run 返回凭据 scope/provider、权限、角色哈希、表情计数/最大编号、旧表行数和保留文件，且验证匹配密钥可解密。目标有 data/ 与 secrets/，不是源码覆盖包。将服务数据路径指向迁移目标 data/，外置密钥指向同一快照 secrets/chat-master.key 或已核对一致的安全位置，不得启动时生成替代密钥。
 
-迁移保留聊天凭据、角色、scoped 状态，将下载策略独立到 download-policy.sqlite3。未知旧表和旧历史原样归档，不批量向模型发总结，不合并群/私聊。无明确授权来源的旧 scope 保持关闭，在后台逐一核对。原生新档案存于 chat-service/instances/qq_账号_kind_owner/。原有 conversation_memories 留作旧档案；后台原生记忆通过所属实例 mailbox 操作事实账本。离线实例明确报错，先用已许可消息启动。
+迁移保留聊天凭据、角色、scoped 状态，将下载策略独立到 download-policy.sqlite3。未知旧表和旧历史原样归档，不批量向模型发总结，不合并群/私聊。无明确授权来源的旧 scope 保持关闭，在后台逐一核对。单进程根目录为 chat-service/instances/qq_账号_runtime/，各会话档案位于 sessions/group_群号/data/ 或 sessions/private_QQ/data/。旧的每群原生目录必须先从离线快照运行 scripts/migrate_native_roots.py --source 快照实例目录 --target 新目录 --account 账号 --offline-snapshot；脚本不修改源，校验 SQLite 完整性与行数，重写媒体路径并保留表情来源。目标必须是源目录之外的新目录；检查 native-migration.json 的 complete 后再使用。原有 conversation_memories 留作旧档案；后台原生记忆通过 mailbox 操作会话自己的事实账本，未缓存会话先用已许可消息启动。
 
 ## 唯一入口切换
 

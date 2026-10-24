@@ -106,7 +106,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(load_config({}).queue_db_path, Path("data/queue.sqlite3"))
         self.assertEqual(load_config({}).user_db_path, Path("data/user.sqlite3"))
         self.assertEqual(load_config({}).service_role, "all")
-        self.assertEqual(load_config({}).chat_backend, "nonebot")
+        self.assertEqual(load_config({}).chat_backend, "maibot")
         self.assertEqual(load_config({}).admin_port, 8081)
 
     def test_chat_proxy_is_empty_by_default(self):

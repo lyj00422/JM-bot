@@ -19,6 +19,8 @@ class SplitAdapter(Adapter):
         if route.domain in {'drop'}:
             return None
         if route.domain in {'chat', 'credential'}:
+            if not os.environ.get('JM_BOT_SERVICE_TOKEN'):
+                return None
             if cls.inbox is None:
                 cls.inbox = IngressQueue(maxsize=128)
             if cls.worker is None or cls.worker.done():

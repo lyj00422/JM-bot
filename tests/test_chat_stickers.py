@@ -64,36 +64,3 @@ def test_missing_image_is_filtered_even_with_valid_catalog_id():
     with patch.object(Path, 'is_file', return_value=False):
         assert chat_stickers.sticker_path('131') is None
         assert split_chat_reply('[sticker:131]') == []
-
-
-@pytest.mark.parametrize('reply', ['[sticker:131]', '开心[sticker:131][qq_face:401]'])
-def test_chat_sender_serializes_actual_image_bytes_and_keeps_history_marker(reply):
-    import jmbot.bot as bot_module
-    from jmbot.core.chat_stickers import sticker_path
-
-    messages = list(bot_module._chat_reply_messages(reply, reply_message_id=123))
-    assert len(messages) == 1
-    message, stored = messages[0]
-    assert message[0].type == 'reply'
-    image = next(segment for segment in message if segment.type == 'image')
-    assert image.data['file'].startswith('base64://')
-    assert base64.b64decode(image.data['file'][9:]) == sticker_path('131').read_bytes()
-    assert '[sticker:131]' in stored
-    assert 'base64' not in stored
-
-
-def test_private_sender_delivers_sticker_without_exposing_marker():
-    import jmbot.bot as bot_module
-
-    matcher = AsyncMock()
-    asyncio.run(bot_module._send_chat_reply(matcher, '[sticker:131]'))
-    matcher.send.assert_awaited_once()
-    message = matcher.send.await_args.args[0]
-    assert [segment.type for segment in message] == ['image']
-
-
-def test_image_disappearing_before_send_does_not_send_an_empty_quote():
-    import jmbot.bot as bot_module
-
-    with patch.object(Path, 'read_bytes', side_effect=OSError):
-        assert list(bot_module._chat_reply_messages('[sticker:131]', 123)) == []
