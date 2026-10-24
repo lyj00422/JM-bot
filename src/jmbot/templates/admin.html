@@ -453,7 +453,7 @@
         editor.hidden = false;
       } catch (error) { note(error.message); }
     }
-    $("refresh-persona-scopes").onclick = loadPersonaScopes;
+    $("refresh-persona-scopes").onclick = () => { rosterCache = null; loadPersonaScopes(); };
     $("persona-kind-filter").onchange = loadPersonaScopes;
     $("persona-search").oninput = loadPersonaScopes;
     async function loadAdmins() { try { const rows = await api("/api/admins"); $("admin-list").textContent = rows.map((row) => `QQ ${row.qq_id}${row.is_super ? "（超级管理员）" : ""}${row.enabled ? "" : "（已停用）"}`).join("\n"); } catch (error) { note(error.message); } }
