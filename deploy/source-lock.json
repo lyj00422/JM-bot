@@ -1,0 +1,7 @@
+{
+  "maibot": {"repository": "https://github.com/Mai-with-u/MaiBot", "commit": "c602a2780f4f4dda4a6be46d67abc1cfb1ad420c", "python": ">=3.12", "uv_lock_sha256": "71069a89a2eb84ded3cd72814de45f70e4fd02970bb0aeb532009006c4744b9d"},
+  "napcat": {"repository": "https://github.com/NapNeko/NapCatQQ", "reference_commit": "3420f0b76d7dc0ac92cde1663f21ea27f61e13bb"},
+  "nonebot": {"package": "nonebot2", "version": "2.5.0", "research_commit": "6e1efbea0e0341b461c5ace5ecc794e302b3eac6"},
+  "onebot": {"package": "nonebot-adapter-onebot", "version": "2.4.6"},
+  "adapter": {"implementation": "src/jmbot/split_adapter.py + src/jmbot/native_worker.py", "revision": "same Git revision as deployed JMbot", "official_connector_used": false}
+}

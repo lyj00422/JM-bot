@@ -1,0 +1,17 @@
+[Unit]
+Description=JMbot loopback split-service management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jmbot
+EnvironmentFile=/etc/jmbot-split.env
+ExecStart=/opt/jmbot/.venv-admin/bin/python /opt/jmbot/main_admin.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

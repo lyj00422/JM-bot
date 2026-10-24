@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "ds_school": {
+      "base_url": "https://REPLACE_WITH_SCHOOL_GATEWAY/v1",
+      "tasks": {
+        "planner": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "replyer": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "utils": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "fast_model": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "memory": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "mid_memory": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "learner": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
+        "embedding": {"model": "REPLACE_WITH_EMBEDDING_MODEL", "dimension": 1024, "enabled": true, "concurrency": 1},
+        "emoji": {"enabled": false},
+        "vlm": {"enabled": false},
+        "image_embedding": {"enabled": false},
+        "voice": {"enabled": false}
+      }
+    }
+  }
+}

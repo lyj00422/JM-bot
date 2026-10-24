@@ -1,0 +1,19 @@
+[Unit]
+Description=JMbot scoped native MaiBot coordinator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jmbot
+EnvironmentFile=/etc/jmbot-split.env
+ExecStart=/opt/jmbot/.venv-chat/bin/python /opt/jmbot/main_chat.py
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=25
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

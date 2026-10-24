@@ -1,0 +1,18 @@
+[Unit]
+Description=JMbot downloads and early NapCat ingress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jmbot
+EnvironmentFile=/etc/jmbot-split.env
+ExecStart=/opt/jmbot/.venv-download/bin/python /opt/jmbot/main.py
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

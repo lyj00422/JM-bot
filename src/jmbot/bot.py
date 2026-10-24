@@ -115,6 +115,9 @@ from jmbot.core.user_store import UserDataStore
 
 
 CONFIG = load_config()
+from jmbot.core.process_lease import ProcessLease
+_sender_lease = ProcessLease(Path(os.environ.get('JM_BOT_RUNTIME_LOCK_DIR', 'data')) / 'qq-sender.lock')
+_download_lease = ProcessLease(CONFIG.queue_db_path.with_suffix('.writer.lock'))
 DOWNLOAD_SETTINGS = DownloadSettings(
     download_root=CONFIG.download_root,
     option_root=CONFIG.option_root,
@@ -128,11 +131,20 @@ DOWNLOAD_SETTINGS = DownloadSettings(
 )
 ALBUM_QUEUE = PersistentAlbumQueue(CONFIG.queue_db_path)
 USER_STORE = UserDataStore(CONFIG.user_db_path)
-CHAT_STORE = ChatStore(CONFIG.chat_db_path, master_key_path=CONFIG.chat_master_key_path)
-ADMIN_STORE = AdminStore(CONFIG.admin_db_path)
+SPLIT_MODE = CONFIG.chat_backend == "maibot"
+if SPLIT_MODE:
+    from jmbot.service_rpc import RPCClient, RemoteStore
+    _service_token = os.environ["JM_BOT_SERVICE_TOKEN"]
+    _chat_client = RPCClient(os.environ.get("JM_BOT_CHAT_SERVICE_URL", "http://127.0.0.1:8082"), _service_token)
+    CHAT_STORE = RemoteStore(_chat_client, "credentials")
+    from jmbot.resilient_admin import ResilientAdmin
+    ADMIN_STORE = ResilientAdmin(os.environ.get("JM_BOT_ADMIN_SERVICE_URL", "http://127.0.0.1:8081"), _service_token)
+else:
+    CHAT_STORE = ChatStore(CONFIG.chat_db_path, master_key_path=CONFIG.chat_master_key_path)
+    ADMIN_STORE = AdminStore(CONFIG.admin_db_path)
 SERVICE_HEARTBEAT_NAME = service_heartbeat_name(CONFIG.service_role)
-CONVERSATION_STORE = ConversationStateStore(CONFIG.conversation_db_path)
-for _legacy_group_id in CHAT_STORE.known_group_ids() | CONFIG.allowed_group_ids:
+CONVERSATION_STORE = ConversationStateStore(os.environ.get("JM_BOT_DOWNLOAD_POLICY_DB", "data/download-policy.sqlite3")) if SPLIT_MODE else ConversationStateStore(CONFIG.conversation_db_path)
+for _legacy_group_id in (() if SPLIT_MODE else CHAT_STORE.known_group_ids() | CONFIG.allowed_group_ids):
     if not CONVERSATION_STORE.has_policy(Scope("group", _legacy_group_id)):
         _is_legacy_download_group = not CONFIG.allowed_group_ids or _legacy_group_id in CONFIG.allowed_group_ids
         _was_legacy_chat_enabled = not CONFIG.allowed_group_ids or _legacy_group_id in CONFIG.allowed_group_ids
@@ -146,7 +158,7 @@ CHAT_SCHEDULER = FairChatScheduler(
     per_scope_limit=CONFIG.chat_scheduler_scope_limit,
 )
 CHAT_ROLE = load_chat_role(CONFIG.chat_role_path)
-if CONVERSATION_STORE.get_default_persona("", "")[2] == 0:
+if not SPLIT_MODE and CONVERSATION_STORE.get_default_persona("", "")[2] == 0:
     CONVERSATION_STORE.set_default_persona(CHAT_ROLE.name, CHAT_ROLE.system_prompt)
 _private_chat_locks: dict[int, asyncio.Lock] = {}
 _group_chat_locks: dict[int, asyncio.Lock] = {}
@@ -251,7 +263,13 @@ nonebot.init(
     superusers={str(user_id) for user_id in CONFIG.superuser_ids},
 )
 DRIVER = get_driver()
-DRIVER.register_adapter(OneBotV11Adapter)
+if SPLIT_MODE:
+    from jmbot.split_adapter import SplitAdapter
+    DRIVER.register_adapter(SplitAdapter)
+    from jmbot.download_api import mount_download_api
+    mount_download_api(DRIVER.server_app, DRIVER, ALBUM_QUEUE, CONVERSATION_STORE, _service_token, CONFIG.queue_db_path)
+else:
+    DRIVER.register_adapter(OneBotV11Adapter)
 
 
 def _install_chat_secret_log_redaction() -> None:
@@ -274,7 +292,7 @@ _install_chat_secret_log_redaction()
 
 @DRIVER.on_bot_connect
 async def _start_queue_worker_on_connect(bot: Bot) -> None:
-    ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
+    await asyncio.to_thread(ADMIN_STORE.heartbeat, SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
     _ensure_heartbeat_worker(bot)
     if CONFIG.service_role in {"all", "download"}:
         await _ensure_queue_worker(bot)
@@ -287,7 +305,7 @@ async def _start_queue_worker_on_connect(bot: Bot) -> None:
 
 @DRIVER.on_bot_disconnect
 async def _stop_attention_on_disconnect(bot: Bot) -> None:
-    ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
+    await asyncio.to_thread(ADMIN_STORE.heartbeat, SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
     heartbeat = _heartbeat_tasks.pop(str(bot.self_id), None)
     if heartbeat:
         heartbeat.cancel()
@@ -325,6 +343,8 @@ async def _stop_attention_on_shutdown() -> None:
     for task in heartbeat_tasks:
         task.cancel()
     await asyncio.gather(*heartbeat_tasks, return_exceptions=True)
+    _download_lease.close()
+    _sender_lease.close()
 
 
 async def _is_jm_command(event: MessageEvent) -> bool:
@@ -608,14 +628,15 @@ async def capture_approval_request(event: FriendRequestEvent | GroupRequestEvent
     if CONFIG.service_role == "chat":
         return
     if isinstance(event, FriendRequestEvent):
-        ADMIN_STORE.upsert_approval(
+        await asyncio.to_thread(ADMIN_STORE.upsert_approval,
             "friend", str(event.user_id), "pending",
             {"flag": event.flag, "comment": event.comment or ""},
         )
         return
     if isinstance(event, GroupRequestEvent):
-        CONVERSATION_STORE.set_policy(Scope("group", int(event.group_id)), chat_enabled=False, download_enabled=False)
-        ADMIN_STORE.upsert_approval(
+        if not CONVERSATION_STORE.has_policy(Scope("group", int(event.group_id))):
+            CONVERSATION_STORE.set_policy(Scope("group", int(event.group_id)), chat_enabled=False, download_enabled=False)
+        await asyncio.to_thread(ADMIN_STORE.upsert_approval,
             "group", str(event.group_id), "pending",
             {"flag": event.flag, "sub_type": event.sub_type, "user_id": event.user_id, "comment": event.comment or ""},
         )
@@ -638,10 +659,10 @@ def _ensure_heartbeat_worker(bot: Bot) -> None:
 async def _heartbeat_worker(bot: Bot) -> None:
     try:
         while True:
-            ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
+            await asyncio.to_thread(ADMIN_STORE.heartbeat, SERVICE_HEARTBEAT_NAME, True, f"QQ {bot.self_id} connected")
             await asyncio.sleep(15)
     except asyncio.CancelledError:
-        ADMIN_STORE.heartbeat(SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
+        await asyncio.to_thread(ADMIN_STORE.heartbeat, SERVICE_HEARTBEAT_NAME, False, "NapCat connection disconnected")
         raise
 
 
@@ -656,23 +677,40 @@ def _ensure_approval_worker(bot: Bot) -> None:
 
 async def _approval_worker(bot: Bot) -> None:
     while True:
-        for action in ADMIN_STORE.pending_approval_actions():
+        for action in await asyncio.to_thread(ADMIN_STORE.pending_approval_actions):
             try:
-                if action["kind"] == "friend":
+                if not action.get('napcat_applied') and not await asyncio.to_thread(ADMIN_STORE.begin_approval, int(action['id'])):
+                    continue
+                if not action.get('napcat_applied') and action["kind"] == "friend":
                     await bot.call_api(
                         "set_friend_add_request", flag=action["flag"],
                         approve=action["decision"] == "approve",
                     )
-                else:
+                elif not action.get('napcat_applied'):
                     await bot.call_api(
                         "set_group_add_request", flag=action["flag"], sub_type=action["sub_type"],
                         approve=action["decision"] == "approve",
                     )
+                if not action.get('napcat_applied'):
+                    await asyncio.to_thread(ADMIN_STORE.acknowledge_approval, int(action['id']))
+                if action["decision"] == "approve":
+                    scope = Scope("private" if action["kind"] == "friend" else "group", int(action["subject_id"]))
+                    if SPLIT_MODE:
+                        if not await asyncio.to_thread(_chat_client.call, "state", "has_policy", scope):
+                            await asyncio.to_thread(_chat_client.call, "state", "set_policy", scope, chat_enabled=action["kind"] == "friend")
+                    elif not CONVERSATION_STORE.has_policy(scope):
+                        CONVERSATION_STORE.set_policy(scope, chat_enabled=action["kind"] == "friend", download_enabled=False)
             except Exception as error:
-                ADMIN_STORE.complete_approval_action(int(action["id"]), type(error).__name__)
+                try:
+                    await asyncio.to_thread(ADMIN_STORE.complete_approval_action, int(action["id"]), type(error).__name__)
+                except RuntimeError:
+                    pass
                 LOGGER.warning("审批操作待重试 action_id={} kind={} error_type={}", action["id"], action["kind"], type(error).__name__)
             else:
-                ADMIN_STORE.complete_approval_action(int(action["id"]))
+                try:
+                    await asyncio.to_thread(ADMIN_STORE.complete_approval_action, int(action["id"]))
+                except RuntimeError:
+                    pass
                 LOGGER.info("审批操作已应用 action_id={} kind={} subject_id={}", action["id"], action["kind"], action["subject_id"])
         await asyncio.sleep(2)
 
@@ -690,7 +728,7 @@ def _ensure_control_worker(bot: Bot) -> None:
 
 async def _control_action_worker() -> None:
     while True:
-        for action in ADMIN_STORE.claim_control_actions():
+        for action in await asyncio.to_thread(ADMIN_STORE.claim_control_actions):
             action_id = int(action["id"])
             payload = action["payload"]
             try:
@@ -710,13 +748,19 @@ async def _control_action_worker() -> None:
                 else:
                     raise ValueError("unsupported control action")
             except Exception as error:
-                ADMIN_STORE.complete_control_action(action_id, error=type(error).__name__)
+                try:
+                    await asyncio.to_thread(ADMIN_STORE.complete_control_action, action_id, error=type(error).__name__)
+                except RuntimeError:
+                    pass
                 LOGGER.warning(
                     "后台下载操作失败 action_id={} action={} error_type={}",
                     action_id, action["name"], type(error).__name__,
                 )
             else:
-                ADMIN_STORE.complete_control_action(action_id, result=result)
+                try:
+                    await asyncio.to_thread(ADMIN_STORE.complete_control_action, action_id, result=result)
+                except RuntimeError:
+                    pass
                 LOGGER.info("后台下载操作已应用 action_id={} action={}", action_id, action["name"])
         await asyncio.sleep(1)
 
@@ -1752,7 +1796,7 @@ async def _drain_album_queue(bot: Bot) -> None:
             upload_private=lambda user_id, pdf_path: upload_private_pdf(bot, user_id, pdf_path),
             notify=lambda job, message: _notify_job(bot, job, message),
             cleanup=_cleanup_job_files if CONFIG.clean_after_upload else None,
-            is_canceled=ALBUM_QUEUE.is_canceled,
+            is_canceled=_job_canceled,
         )
         if not processed:
             return
@@ -1772,7 +1816,7 @@ async def _run_queued_album_job(job: AlbumQueueJob):
             DOWNLOAD_SETTINGS,
             CONFIG.output_root,
             timeout_seconds=CONFIG.job_timeout_seconds,
-            cancel_checker=lambda: ALBUM_QUEUE.is_canceled(job.id),
+            cancel_checker=lambda: _job_canceled(job.id),
         )
     )
     while not task.done():
@@ -1795,6 +1839,8 @@ async def _run_queued_album_job(job: AlbumQueueJob):
 
 
 async def _notify_job(bot: Bot, job: AlbumQueueJob, message: str) -> None:
+    if _job_canceled(job.id):
+        return
     if job.destination_type == "group":
         if job.group_id is None:
             raise ValueError(f"Group job {job.id} is missing group_id")
@@ -1805,6 +1851,22 @@ async def _notify_job(bot: Bot, job: AlbumQueueJob, message: str) -> None:
 
 async def _cleanup_job_files(album_dir, pdf_path) -> None:
     await asyncio.to_thread(cleanup_album_files, album_dir, pdf_path)
+
+
+def _job_canceled(job_id: int) -> bool:
+    if ALBUM_QUEUE.is_canceled(job_id):
+        return True
+    try:
+        job = ALBUM_QUEUE.get_job(job_id)
+        if job is None:
+            return True
+        scope = Scope("group", job.group_id) if job.destination_type == "group" else Scope("private", job.user_id)
+        if not CONVERSATION_STORE.permitted(scope, "download"):
+            ALBUM_QUEUE.admin_cancel_job(job_id)
+            return True
+        return False
+    except Exception:
+        return True
 
 
 def _cleanup_album_download_dir(album_id: str) -> None:

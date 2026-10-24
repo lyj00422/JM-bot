@@ -1,0 +1,2 @@
+-r requirements-chat.txt
+qrcode==8.2

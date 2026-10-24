@@ -39,6 +39,9 @@ async def process_next_album_job(
     job = queue.claim_next()
     if job is None:
         return False
+    if is_canceled is not None and is_canceled(job.id):
+        queue.admin_cancel_job(job.id)
+        return True
 
     started = time.monotonic()
     LOGGER.info("Starting JM%s queue job %s for %s", job.album_id, job.id, job.destination_type)

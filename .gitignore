@@ -21,6 +21,10 @@ data/output/
 data/*.sqlite3
 data/*.sqlite3-*
 data/chat-master.key
+data/chat-service/
+data/stickers/previews/
+data/stickers/catalog.sqlite3*
+config/model-routes.json
 
 JM-bot/
 JMbot.tar.gz

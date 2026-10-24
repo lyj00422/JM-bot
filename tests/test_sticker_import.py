@@ -62,13 +62,27 @@ class StickerImportTest(unittest.TestCase):
         self.assertEqual((self.catalog / "manifest.json").read_bytes(), before)
         self.assertFalse((self.root / "escape.jpg").exists())
 
-    def test_duplicate_pack_image_is_rejected(self):
+    def test_duplicate_pack_is_idempotent(self):
         package = self.make_zip()
         first = self.importer.import_zip(package)
-        with self.assertRaises(StickerImportError):
-            self.importer.import_zip(package)
+        replay = self.importer.import_zip(package)
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['added'], first['added'])
         self.assertEqual(first["max_id"], 139)
         self.assertEqual(len(json.loads((self.catalog / "manifest.json").read_text(encoding="utf-8"))), 3)
+
+    def test_identical_pixels_have_independent_scope_and_semantics(self):
+        package = self.make_zip()
+        first = self.importer.import_zip(package, scope='group:1')['added'][0]
+        second = self.importer.import_zip(package, scope='private:42')['added'][0]
+        self.assertNotEqual(first['id'], second['id'])
+        self.assertEqual(first['file'], second['file'])
+        self.importer.review(second['id'], {'description': 'private meaning', 'approved': False})
+        rows = self.importer.catalog()
+        self.assertEqual(rows[-2]['description'], '期待')
+        self.assertEqual(rows[-1]['description'], 'private meaning')
+        self.assertFalse(rows[-1]['approved'])
+        self.assertEqual(rows, json.loads(self.importer.manifest_path.read_text(encoding='utf-8')))
 
 
 if __name__ == "__main__":

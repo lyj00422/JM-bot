@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import threading
+import functools
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,7 +64,9 @@ class ConversationStateStore:
 
     CATEGORIES = frozenset({"expression", "interest", "relationship", "experience"})
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, write_barrier=None):
+        self._mutex = threading.RLock()
+        self.write_barrier = write_barrier
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
@@ -139,6 +143,70 @@ class ConversationStateStore:
                 conn.execute("ALTER TABLE conversation_policies ADD COLUMN chat_blacklisted INTEGER NOT NULL DEFAULT 0")
             if "download_blacklisted" not in policy_columns:
                 conn.execute("ALTER TABLE conversation_policies ADD COLUMN download_blacklisted INTEGER NOT NULL DEFAULT 0")
+            if "version" not in policy_columns:
+                conn.execute("ALTER TABLE conversation_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS state_revision(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
+                INSERT OR IGNORE INTO state_revision VALUES(1,0);
+                CREATE TABLE IF NOT EXISTS memory_revisions(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, scope_key TEXT NOT NULL, memory_id INTEGER,
+                    operation TEXT NOT NULL, payload TEXT NOT NULL, created_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS accepted_sources(
+                    scope_key TEXT NOT NULL,message_id TEXT NOT NULL,speaker TEXT NOT NULL,
+                    content TEXT NOT NULL,created_at REAL NOT NULL,PRIMARY KEY(scope_key,message_id));
+                CREATE TABLE IF NOT EXISTS growth_jobs(scope_key TEXT PRIMARY KEY, updated_at REAL NOT NULL);
+            """)
+
+    def record_source(self, scope: str, message_id: str, speaker: str, content: str, timestamp: float):
+        key = self._validate_key(scope)
+        if not self.permitted(key) or not content.strip():
+            return
+        with self._connection() as conn:
+            conn.execute('INSERT OR IGNORE INTO accepted_sources VALUES(?,?,?,?,?)', (key, str(message_id), str(speaker), content[:12000], timestamp))
+
+    def growth_sources(self, scope: str):
+        key = self._validate_key(scope)
+        with self._connection() as conn:
+            rows = conn.execute('SELECT message_id,speaker,content,created_at FROM accepted_sources WHERE scope_key=? ORDER BY created_at DESC LIMIT 32', (key,)).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def set_growth_pending(self, scope, pending=True):
+        key = self._validate_key(scope)
+        with self._connection() as conn:
+            if pending:
+                conn.execute('INSERT INTO growth_jobs VALUES(?,?) ON CONFLICT(scope_key) DO UPDATE SET updated_at=excluded.updated_at', (key, time.time()))
+            else:
+                conn.execute('DELETE FROM growth_jobs WHERE scope_key=?', (key,))
+
+    def pending_growth_scopes(self):
+        with self._connection() as conn:
+            return [row[0] for row in conn.execute('SELECT scope_key FROM growth_jobs ORDER BY updated_at LIMIT 64')]
+
+    def revision(self) -> int:
+        with self._connection() as conn:
+            return int(conn.execute("SELECT version FROM state_revision WHERE id=1").fetchone()[0])
+
+    def activation_revision(self, scope):
+        import hashlib
+        key = self._validate_key(scope)
+        policy = self.get_policy(key)
+        _, _, default_version = self.get_default_persona('', '')
+        _, base_version = self.get_base_persona(key)
+        with self._connection() as conn:
+            global_row = conn.execute("SELECT updated_at FROM global_policies WHERE key='chat'").fetchone()
+        global_epoch = global_row[0] if global_row else None
+        growth = [(item.entry_id, item.version, item.active, item.frozen) for item in self.list_growth(key, include_inactive=True)]
+        return hashlib.sha256(json.dumps([self.policy_version(key), self.global_enabled('chat'), global_epoch, default_version if policy.default_persona else None, base_version, growth if policy.growth_enabled else []]).encode()).hexdigest()
+
+    def policy_version(self, scope: Scope | str) -> int:
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        with self._connection() as conn:
+            row = conn.execute("SELECT version FROM conversation_policies WHERE scope_key=?", (key,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def permitted(self, scope: Scope | str, domain: str = "chat") -> bool:
+        policy = self.get_policy(scope)
+        return self.global_enabled(domain) and bool(getattr(policy, domain + "_enabled")) and not bool(getattr(policy, domain + "_blacklisted"))
 
     @staticmethod
     def _validate_key(scope_key: str) -> str:
@@ -173,6 +241,7 @@ class ConversationStateStore:
         if key not in {"chat", "download"}:
             raise ValueError("invalid global policy")
         with self._connection() as conn:
+            conn.execute("UPDATE state_revision SET version=version+1 WHERE id=1")
             conn.execute(
                 "INSERT INTO global_policies(key,enabled,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at",
                 (key, int(enabled), time.time()),
@@ -194,16 +263,22 @@ class ConversationStateStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def set_policy(self, scope: Scope | str, **changes: bool) -> ScopePolicy:
+    def set_policy(self, scope: Scope | str, *, expected_version: int | None = None, **changes: bool) -> ScopePolicy:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
         allowed = {"chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled", "chat_blacklisted", "download_blacklisted"}
         if set(changes) - allowed:
             raise ValueError("unknown policy field")
-        current = self.get_policy(key)
-        values = {name: changes.get(name, getattr(current, name)) for name in allowed}
-        if not values["default_persona"] and not values["growth_enabled"]:
-            raise ValueError("default_persona and growth_enabled cannot both be disabled")
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row_policy = conn.execute("SELECT * FROM conversation_policies WHERE scope_key=?", (key,)).fetchone()
+            current = ScopePolicy(**{name: bool(row_policy[name]) for name in allowed}) if row_policy else ScopePolicy(chat_enabled=key.startswith("private:"))
+            values = {name: changes.get(name, getattr(current, name)) for name in allowed}
+            if not values["default_persona"] and not values["growth_enabled"]:
+                raise ValueError("default_persona and growth_enabled cannot both be disabled")
+            row = conn.execute("SELECT version FROM conversation_policies WHERE scope_key=?", (key,)).fetchone()
+            version = int(row[0]) if row else 0
+            if expected_version is not None and expected_version != version:
+                raise ValueError("policy version changed")
             if current.default_persona and not values["default_persona"]:
                 persona = conn.execute("SELECT name,prompt FROM default_persona WHERE id=1").fetchone()
                 existing = conn.execute("SELECT 1 FROM conversation_personas WHERE scope_key=?", (key,)).fetchone()
@@ -220,7 +295,61 @@ class ConversationStateStore:
                 "chat_blacklisted=excluded.chat_blacklisted,download_blacklisted=excluded.download_blacklisted,updated_at=excluded.updated_at",
                 (key, *(int(values[name]) for name in ("chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled", "chat_blacklisted", "download_blacklisted")), time.time()),
             )
+            conn.execute("UPDATE conversation_policies SET version=? WHERE scope_key=?", (version + 1, key))
+            conn.execute("UPDATE state_revision SET version=version+1 WHERE id=1")
         return ScopePolicy(**values)
+
+    def delete_memory(self, scope: Scope | str, memory_id: int) -> bool:
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        with self._connection() as conn:
+            row = conn.execute("SELECT content FROM conversation_memories WHERE scope_key=? AND id=? AND active=1", (key, memory_id)).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE conversation_memories SET active=0 WHERE id=? AND scope_key=?", (memory_id, key))
+            conn.execute("INSERT INTO memory_revisions(scope_key,memory_id,operation,payload,created_at) VALUES(?,?,'delete',?,?)", (key, memory_id, row[0], time.time()))
+        return True
+
+    def edit_memory(self, scope: Scope | str, memory_id: int, content: str) -> bool:
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        if not content.strip():
+            raise ValueError("memory cannot be empty")
+        with self._connection() as conn:
+            row = conn.execute("SELECT content FROM conversation_memories WHERE scope_key=? AND id=? AND active=1", (key, memory_id)).fetchone()
+            if not row:
+                return False
+            conn.execute("INSERT INTO memory_revisions(scope_key,memory_id,operation,payload,created_at) VALUES(?,?,'edit',?,?)", (key, memory_id, json.dumps({'before': row[0], 'after': content}, ensure_ascii=False), time.time()))
+            conn.execute("UPDATE conversation_memories SET content=? WHERE id=? AND scope_key=?", (content.strip(), memory_id, key))
+        return True
+
+    def commit_candidate(self, scope: str, category: str, content: str, evidence: str, *, expected_policy: int, expected_growth: int) -> dict:
+        # One owner serializes this check with all policy/persona mutations.
+        key = self._validate_key(scope)
+        if self.policy_version(key) != expected_policy or not self.permitted(key):
+            raise ValueError("stale or revoked conversation policy")
+        if not self.get_policy(key).growth_enabled:
+            raise ValueError("growth is disabled")
+        try:
+            refs = json.loads(evidence)
+            if not isinstance(refs, list) or not 1 <= len(refs) <= 8:
+                raise ValueError()
+            with self._connection() as conn:
+                for ref in refs:
+                    source = conn.execute('SELECT content FROM accepted_sources WHERE scope_key=? AND message_id=?', (key, str(ref['message_id']))).fetchone()
+                    if not source or not ref.get('quote') or str(ref['quote']) not in source[0]:
+                        raise ValueError()
+        except (ValueError, TypeError, KeyError):
+            raise ValueError('growth evidence must quote accepted messages in this scope') from None
+        history = self.list_growth(key, include_inactive=True)
+        if max((entry.version for entry in history), default=0) != expected_growth:
+            raise ValueError("growth changed while candidate was running")
+        if any(entry.content == content.strip() for entry in history if entry.active):
+            return {"duplicate": True}
+        import re
+        if re.search(r'(?i)(\[CQ:|sk-[a-z0-9]|api.?key|ignore.{0,20}instruction|忽略.{0,12}(规则|指令)|覆盖.{0,10}(人设|权限)|系统提示)', content + evidence):
+            raise ValueError("candidate contains protected instructions or secrets")
+        if re.search(r'(?i)(https?://|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|(?<!\d)1[3-9]\d{9}(?!\d)|(?<!\d)\d{15,19}(?!\d)|身份证|银行卡|家庭住址|登录密码|验证码|medical diagnosis|患有|确诊)', content + evidence):
+            raise ValueError('candidate contains sensitive personal data')
+        return self.add_growth(key, category, content, evidence).__dict__
 
     def get_base_persona(self, scope: Scope | str) -> tuple[str | None, int]:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
@@ -238,6 +367,8 @@ class ConversationStateStore:
         if not name or not prompt:
             raise ValueError("persona name and prompt cannot be empty")
         with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             row = conn.execute("SELECT version FROM default_persona WHERE id=1").fetchone()
             version = int(row[0]) if row else 0
             if expected_version is not None and expected_version != version:
@@ -273,6 +404,8 @@ class ConversationStateStore:
         if not prompt:
             raise ValueError("persona prompt cannot be empty")
         with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             row = conn.execute("SELECT base_version FROM conversation_personas WHERE scope_key=?", (key,)).fetchone()
             version = int(row[0]) if row else 0
             if expected_version is not None and expected_version != version:
@@ -293,6 +426,8 @@ class ConversationStateStore:
         if not content or not evidence:
             raise ValueError("growth content and evidence are required")
         with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             row = conn.execute("SELECT COALESCE(MAX(version),0) FROM persona_growth WHERE scope_key=?", (key,)).fetchone()
             version = int(row[0]) + 1
             now = time.time()
@@ -312,6 +447,7 @@ class ConversationStateStore:
 
     def set_growth_frozen(self, entry_id: int, frozen: bool) -> None:
         with self._connection() as conn:
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             if conn.execute("UPDATE persona_growth SET frozen=? WHERE id=?", (int(frozen), entry_id)).rowcount != 1:
                 raise KeyError("growth entry not found")
 
@@ -320,6 +456,8 @@ class ConversationStateStore:
         if not content or not evidence:
             raise ValueError("growth content and evidence are required")
         with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             old = conn.execute("SELECT scope_key,category,version,frozen FROM persona_growth WHERE id=? AND active=1", (entry_id,)).fetchone()
             if not old:
                 raise KeyError("growth entry not found")
@@ -335,6 +473,7 @@ class ConversationStateStore:
     def rollback_growth(self, scope: Scope | str, version: int) -> int:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
         with self._connection() as conn:
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
             cursor = conn.execute("UPDATE persona_growth SET active=0 WHERE scope_key=? AND version>? AND active=1", (key, version))
         return cursor.rowcount
 
@@ -354,4 +493,22 @@ class ConversationStateStore:
     def export_scope(self, scope: Scope | str) -> dict[str, object]:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
         base, version = self.get_base_persona(key)
-        return {"scope": key, "policy": self.get_policy(key).__dict__, "base_persona": base, "base_version": version, "memories": self.list_memories(key), "growth": [entry.__dict__ for entry in self.list_growth(key, include_inactive=True)]}
+        return {"scope": key, "policy": self.get_policy(key).__dict__, "policy_version": self.policy_version(key), "base_persona": base, "base_version": version, "memories": self.list_memories(key), "growth": [entry.__dict__ for entry in self.list_growth(key, include_inactive=True)]}
+
+
+def _serialized(method):
+    @functools.wraps(method)
+    def invoke(self, *args, **kwargs):
+        from contextlib import nullcontext
+        mutating = method.__name__.startswith(('set_', 'add_', 'edit_', 'delete_', 'rollback_', 'commit_', 'record_'))
+        with self.write_barrier.hold() if self.write_barrier and mutating else nullcontext():
+            with self._mutex:
+                return method(self, *args, **kwargs)
+    return invoke
+
+
+# RPC threads and the native coordinator share one owner. Serialize composite
+# version checks with all state edits; SQLite still protects cross-process readers.
+for _name, _method in list(vars(ConversationStateStore).items()):
+    if not _name.startswith('_') and callable(_method):
+        setattr(ConversationStateStore, _name, _serialized(_method))

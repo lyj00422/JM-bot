@@ -14,6 +14,8 @@ import secrets
 import sqlite3
 import time
 import asyncio
+import urllib.parse
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -105,6 +107,10 @@ class AdminStore:
                 conn.execute("ALTER TABLE approval_actions ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
             if "next_retry_at" not in action_columns:
                 conn.execute("ALTER TABLE approval_actions ADD COLUMN next_retry_at REAL NOT NULL DEFAULT 0")
+            if 'napcat_applied' not in action_columns:
+                conn.execute('ALTER TABLE approval_actions ADD COLUMN napcat_applied INTEGER NOT NULL DEFAULT 0')
+            if 'sending' not in action_columns:
+                conn.execute('ALTER TABLE approval_actions ADD COLUMN sending INTEGER NOT NULL DEFAULT 0')
             conn.execute(
                 "INSERT OR IGNORE INTO admins(qq_id,password_hash,is_super,created_at,updated_at) VALUES(?,?,?,?,?)",
                 (SUPER_ADMIN_ID, "!INITIALIZE_WITH_jmbot-admin-init!", 1, time.time(), time.time()),
@@ -131,6 +137,7 @@ class AdminStore:
         encoded = self._hash(password)
         now = time.time()
         with self._connection() as conn:
+            conn.execute("DELETE FROM admin_sessions WHERE qq_id=?", (qq_id,))
             conn.execute(
                 "INSERT INTO admins(qq_id,password_hash,is_super,created_at,updated_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(qq_id) DO UPDATE SET password_hash=excluded.password_hash,is_super=excluded.is_super,enabled=1,updated_at=excluded.updated_at",
@@ -227,12 +234,16 @@ class AdminStore:
         if qq_id == SUPER_ADMIN_ID:
             raise ValueError("不能删除超级管理员")
         with self._connection() as conn:
+            conn.execute("DELETE FROM admin_sessions WHERE qq_id=?", (qq_id,))
             conn.execute("UPDATE admins SET enabled=0,updated_at=? WHERE qq_id=?", (time.time(), qq_id))
 
     def upsert_approval(self, kind: str, subject_id: str, status: str, payload: dict[str, Any] | None = None) -> None:
         if kind not in {"friend", "group"} or status not in {"pending", "approved", "rejected"}:
             raise ValueError("invalid approval")
         with self._connection() as conn:
+            old = conn.execute("SELECT payload,status FROM approvals WHERE kind=? AND subject_id=?", (kind, subject_id)).fetchone()
+            if old and status == "pending" and json.loads(old[0]).get("flag") == (payload or {}).get("flag"):
+                return
             conn.execute(
                 "INSERT INTO approvals(kind,subject_id,status,payload,updated_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(kind,subject_id) DO UPDATE SET status=excluded.status,payload=excluded.payload,updated_at=excluded.updated_at",
@@ -243,20 +254,39 @@ class AdminStore:
         if kind not in {"friend", "group"} or decision not in {"approve", "reject"}:
             raise ValueError("invalid approval action")
         with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute("SELECT id,decision FROM approval_actions WHERE kind=? AND subject_id=? AND flag=? ORDER BY id DESC LIMIT 1", (kind, subject_id, flag)).fetchone()
+            if old:
+                if old[1] != decision:
+                    raise ValueError('approval already has a different decision')
+                return int(old[0])
             cursor = conn.execute(
                 "INSERT INTO approval_actions(kind,subject_id,flag,decision,sub_type,created_at) VALUES(?,?,?,?,?,?)",
                 (kind, subject_id, flag, decision, sub_type, time.time()),
             )
+            conn.execute('UPDATE approvals SET status=?,updated_at=? WHERE kind=? AND subject_id=?', ('approved' if decision == 'approve' else 'rejected', time.time(), kind, subject_id))
             return int(cursor.lastrowid)
 
     def pending_approval_actions(self, limit: int = 20) -> list[dict[str, Any]]:
         with self._connection() as conn:
             rows = conn.execute(
-                "SELECT id,kind,subject_id,flag,decision,sub_type FROM approval_actions "
-                "WHERE applied_at IS NULL AND next_retry_at<=? ORDER BY id LIMIT ?",
+                "SELECT id,kind,subject_id,flag,decision,sub_type,napcat_applied FROM approval_actions "
+                "WHERE applied_at IS NULL AND (sending=0 OR napcat_applied=1) AND next_retry_at<=? ORDER BY id LIMIT ?",
                 (time.time(), limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def acknowledge_approval(self, action_id: int):
+        with self._connection() as conn:
+            conn.execute('UPDATE approval_actions SET napcat_applied=1 WHERE id=?', (action_id,))
+
+    def begin_approval(self, action_id: int):
+        with self._connection() as conn:
+            return conn.execute('UPDATE approval_actions SET sending=1,last_error=? WHERE id=? AND sending=0 AND napcat_applied=0', ('NapCat outcome unknown until acknowledged; reconcile before retry', action_id)).rowcount == 1
+
+    def reconcile_approval(self, action_id: int, applied: bool):
+        with self._connection() as conn:
+            conn.execute('UPDATE approval_actions SET napcat_applied=?,sending=0,last_error=NULL,next_retry_at=0 WHERE id=? AND applied_at IS NULL', (int(applied), action_id))
 
     def complete_approval_action(self, action_id: int, error: str | None = None) -> None:
         with self._connection() as conn:
@@ -277,7 +307,7 @@ class AdminStore:
             data["payload"] = json.loads(data["payload"])
             with self._connection() as conn:
                 action = conn.execute(
-                    "SELECT applied_at,last_error FROM approval_actions WHERE kind=? AND subject_id=? ORDER BY id DESC LIMIT 1",
+                    "SELECT applied_at,last_error,id,sending,napcat_applied FROM approval_actions WHERE kind=? AND subject_id=? ORDER BY id DESC LIMIT 1",
                     (data["kind"], data["subject_id"]),
                 ).fetchone()
             data["apply_state"] = (
@@ -286,12 +316,28 @@ class AdminStore:
                 "pending" if action else "not_submitted"
             )
             data["apply_error"] = str(action[1]) if action and action[1] else None
+            data['action_id'] = int(action[2]) if action else None
+            data['outcome_unknown'] = bool(action and action[3] and not action[4] and not action[0])
             result.append(data)
         return result
 
     def set_help(self, content: str) -> None:
         with self._connection() as conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS help_versions(id INTEGER PRIMARY KEY AUTOINCREMENT,content TEXT NOT NULL,created_at REAL NOT NULL)')
+            conn.execute('INSERT INTO help_versions(content,created_at) VALUES(?,?)', (content, time.time()))
             conn.execute("INSERT INTO help_text(key,content,updated_at) VALUES('jm',?,?) ON CONFLICT(key) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at", (content, time.time()))
+
+    def help_versions(self):
+        with self._connection() as conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS help_versions(id INTEGER PRIMARY KEY AUTOINCREMENT,content TEXT NOT NULL,created_at REAL NOT NULL)')
+            return [dict(row) for row in conn.execute('SELECT * FROM help_versions ORDER BY id DESC LIMIT 100')]
+
+    def restore_help(self, version: int):
+        versions = self.help_versions()
+        item = next((item for item in versions if item['id'] == version), None)
+        if item is None:
+            raise ValueError('help version not found')
+        self.set_help(item['content'])
 
     def get_help(self) -> str:
         with self._connection() as conn:
@@ -349,6 +395,7 @@ class LoginBody(BaseModel):
 
 
 class PolicyBody(BaseModel):
+    expected_version: int | None = None
     chat_enabled: bool | None = None
     download_enabled: bool | None = None
     use_default_key: bool | None = None
@@ -389,17 +436,52 @@ class CredentialBody(BaseModel):
     overwrite: bool = False
 
 
-def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, sticker_dir: str | Path, status_provider=None, chat_store=None, queue_db_path: str | Path | None = None, default_provider: str = "ds_school", fallback_default_key_configured: bool = False) -> FastAPI:
+def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, sticker_dir: str | Path, status_provider=None, chat_store=None, queue_db_path: str | Path | None = None, default_provider: str = "ds_school", fallback_default_key_configured: bool = False, state_store=None, sticker_store=None, download_client=None, native_client=None) -> FastAPI:
     admins = AdminStore(admin_db)
-    state = ConversationStateStore(conversation_db)
-    stickers = StickerImporter(sticker_dir)
+    state = state_store if state_store is not None else ConversationStateStore(conversation_db)
+    stickers = sticker_store if sticker_store is not None else StickerImporter(sticker_dir)
     app = FastAPI(title="JMbot 管理后台", docs_url="/api/docs")
+    app.state.admin_store = admins
+    from jmbot.napcat_admin import NapCatAdmin
+    napcat_admin = NapCatAdmin()
+
+    @app.exception_handler(RuntimeError)
+    async def unavailable(request: Request, exc: RuntimeError):
+        return JSONResponse({"detail": "业务服务未确认全部应用，请刷新各域状态后重试", "applied": None, "domains": getattr(exc, 'domains', {})}, status_code=503)
+
+    @app.middleware("http")
+    async def protect_browser_requests(request: Request, call_next):
+        # Loopback HTTP is intentional for SSH tunnels. Require a session-bound
+        # CSRF token as well as SameSite cookies for every authenticated write.
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin = request.headers.get("origin")
+            if origin and urllib.parse.urlsplit(origin).netloc != request.headers.get("host"):
+                return JSONResponse({"detail": "跨站请求被拒绝"}, status_code=403)
+            session = request.cookies.get("jmbot_session")
+            if session and request.url.path != "/api/login":
+                expected = hashlib.sha256(("csrf:" + session).encode()).hexdigest()
+                if not hmac.compare_digest(request.headers.get("x-csrf-token", ""), expected):
+                    return JSONResponse({"detail": "CSRF 校验失败，请重新登录"}, status_code=403)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cache-Control"] = "no-store"
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and response.status_code < 400:
+            actor = admins.session_admin(request.cookies.get("jmbot_session"))
+            if actor:
+                with admins._connection() as conn:
+                    conn.execute("INSERT INTO admin_audit(qq_id,action,target,created_at) VALUES(?,?,?,?)",
+                                 (actor, request.method, request.url.path, time.time()))
+        return response
 
     @app.on_event("startup")
     async def start_admin_heartbeat() -> None:
         async def heartbeat_loop() -> None:
             while True:
                 admins.heartbeat("jmbot-admin", True, "管理后台运行中")
+                from jmbot.domain_state import DomainState
+                if isinstance(state, DomainState):
+                    await asyncio.to_thread(state.reconcile)
                 await asyncio.sleep(15)
 
         app.state.heartbeat_task = asyncio.create_task(heartbeat_loop(), name="admin-service-heartbeat")
@@ -423,6 +505,53 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             raise HTTPException(status_code=403, detail="只有超级管理员可以管理管理员账号")
         return qq_id
 
+    @app.get('/api/napcat/login')
+    def napcat_login(_: int = Depends(require_admin)):
+        return napcat_admin.login_state()
+
+    @app.post('/api/napcat/login/refresh')
+    def napcat_refresh(_: int = Depends(require_admin)):
+        return napcat_admin.login_state(refresh=True)
+
+    @app.get('/api/napcat/login/qr')
+    def napcat_qr(_: int = Depends(require_admin)):
+        import io
+        import qrcode
+        value = napcat_admin.login_state().get('qrcodeurl')
+        if not isinstance(value, str) or not value or len(value) > 4096:
+            raise HTTPException(409, '当前没有可用登录二维码')
+        output = io.BytesIO()
+        qrcode.make(value).save(output, format='PNG')
+        return Response(output.getvalue(), media_type='image/png')
+
+    @app.get('/api/native/status')
+    def native_status(_: int = Depends(require_admin)):
+        if native_client is None:
+            return {'enabled': False}
+        return native_client.call('native', 'status')
+
+    @app.get('/api/model-routes')
+    def read_model_routes(_: int = Depends(require_admin)):
+        if native_client is None:
+            raise HTTPException(409, '原生聊天服务未配置')
+        return native_client.call('routes', 'read')
+
+    @app.put('/api/model-routes')
+    def write_model_routes(body: dict, _: int = Depends(require_admin)):
+        if native_client is None:
+            raise HTTPException(409, '原生聊天服务未配置')
+        try:
+            return native_client.call('routes', 'write', body['document'], body['expected_version'])
+        except (KeyError, ValueError):
+            raise HTTPException(409, '模型路由无效或版本变化，请重新读取') from None
+
+    @app.post('/api/native/memory/{account}/{kind}/{owner}')
+    def native_memory(account: int, kind: str, owner: int, body: dict, _: int = Depends(require_admin)):
+        if native_client is None:
+            raise HTTPException(409, '原生聊天服务未配置')
+        scope = Scope(kind, owner)
+        return native_client.call('native', 'memory', f'qq:{account}:{scope.key}', body.get('action', 'list'), **body.get('arguments', {}))
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
         template = Path(__file__).with_name("templates") / "admin.html"
@@ -440,6 +569,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         admins.clear_login_failures(remote_addr)
         response = JSONResponse({"ok": True, "qq_id": body.qq_id})
         response.set_cookie("jmbot_session", token, httponly=True, samesite="strict", secure=False, max_age=3600)
+        response.set_cookie("jmbot_csrf", hashlib.sha256(("csrf:" + token).encode()).hexdigest(), samesite="strict", max_age=3600)
         return response
 
     @app.post("/api/logout")
@@ -447,6 +577,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         admins.revoke_session(request.cookies.get("jmbot_session"))
         response = JSONResponse({"ok": True})
         response.delete_cookie("jmbot_session")
+        response.delete_cookie("jmbot_csrf")
         return response
 
     @app.get("/api/status")
@@ -460,6 +591,8 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
 
     @app.get("/api/download/queue")
     async def download_queue(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
+        if download_client is not None:
+            return await asyncio.to_thread(download_client.call, "download", "snapshot")
         if queue_db_path is None or not Path(queue_db_path).exists():
             return []
         uri = Path(queue_db_path).resolve().as_uri() + "?mode=ro"
@@ -510,7 +643,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"qq_id": qq_id, "is_super": admins.is_super(qq_id)}
 
     @app.get("/api/credentials")
-    async def credentials(_: int = Depends(require_admin)) -> dict[str, Any]:
+    def credentials(_: int = Depends(require_admin)) -> dict[str, Any]:
         scopes: list[dict[str, Any]] = []
         if chat_store is not None:
             for row in chat_store.credential_scopes():
@@ -523,7 +656,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"default_provider": current_provider, "default_configured": default_configured, "scopes": scopes}
 
     @app.put("/api/credentials/default/{provider}")
-    async def set_default_credential(provider: str, body: CredentialBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def set_default_credential(provider: str, body: CredentialBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         if provider not in ALLOWED_PROVIDERS or chat_store is None:
             raise HTTPException(status_code=400, detail="服务商无效或凭据服务未启动")
         chat_store.set_default_credential(provider, body.api_key)
@@ -531,7 +664,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"ok": True, "provider": provider}
 
     @app.put("/api/credentials/{kind}/{owner_id}/{provider}")
-    async def set_scope_credential(kind: str, owner_id: int, provider: str, body: CredentialBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def set_scope_credential(kind: str, owner_id: int, provider: str, body: CredentialBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         if kind not in {"private", "group"} or provider not in ALLOWED_PROVIDERS or chat_store is None:
             raise HTTPException(status_code=400, detail="会话或服务商无效")
         try:
@@ -556,7 +689,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
 
     @app.post("/api/admins")
     async def add_admin(body: LoginBody, _: int = Depends(require_super)) -> dict[str, Any]:
-        admins.set_password(body.qq_id, body.password)
+        admins.set_password(body.qq_id, body.password, is_super=body.qq_id == SUPER_ADMIN_ID)
         return {"ok": True, "qq_id": body.qq_id}
 
     @app.delete("/api/admins/{qq_id}")
@@ -571,8 +704,13 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     async def approvals(status: str | None = None, _: int = Depends(require_admin)) -> list[dict[str, Any]]:
         return admins.approvals(status)
 
+    @app.post('/api/approvals/actions/{action_id}/reconcile')
+    def reconcile_approval(action_id: int, body: GlobalPolicyBody, _: int = Depends(require_admin)):
+        admins.reconcile_approval(action_id, body.enabled)
+        return {'ok': True}
+
     @app.post("/api/approvals/{kind}/{subject_id}/{decision}")
-    async def decide_approval(kind: str, subject_id: str, decision: str, qq_id: int = Depends(require_admin)) -> dict[str, Any]:
+    def decide_approval(kind: str, subject_id: str, decision: str, qq_id: int = Depends(require_admin)) -> dict[str, Any]:
         if decision not in {"approved", "rejected"}:
             raise HTTPException(status_code=400, detail="invalid decision")
         try:
@@ -580,18 +718,15 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             matched = next((item for item in submissions if item["kind"] == kind and item["subject_id"] == subject_id), None)
             if not matched or not matched["payload"].get("flag"):
                 raise ValueError("approval request is missing or already handled")
-            admins.upsert_approval(kind, subject_id, decision, matched["payload"])
             admins.queue_approval_action(kind, subject_id, str(matched["payload"]["flag"]), "approve" if decision == "approved" else "reject", str(matched["payload"].get("sub_type", "")))
-            if kind == "group" and decision == "approved":
-                state.set_policy(Scope("group", int(subject_id)), chat_enabled=False, download_enabled=False)
-            if kind == "friend" and decision == "approved":
-                state.set_policy(Scope("private", int(subject_id)), chat_enabled=True, download_enabled=False)
+            # Authorization is applied by the business worker only after NapCat
+            # has acknowledged the approval, never when the button is clicked.
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="invalid approval subject") from exc
         return {"ok": True, "applied": False, "pending_service_apply": True, "actor": qq_id}
 
     @app.get("/api/scopes/{kind}/{owner_id}")
-    async def get_scope(kind: str, owner_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def get_scope(kind: str, owner_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
         scope = Scope(kind, owner_id)
         data = state.export_scope(scope)
         if chat_store is not None:
@@ -605,7 +740,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return data
 
     @app.get("/api/scopes")
-    async def list_scopes(kind: str | None = None, _: int = Depends(require_admin)) -> list[dict[str, object]]:
+    def list_scopes(kind: str | None = None, _: int = Depends(require_admin)) -> list[dict[str, object]]:
         try:
             scopes = state.list_policies(kind)
             if chat_store is not None:
@@ -620,21 +755,42 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/policies/global")
-    async def get_global_policy(_: int = Depends(require_admin)) -> dict[str, bool]:
-        return {"chat": state.global_enabled("chat"), "download": state.global_enabled("download")}
+    def get_global_policy(_: int = Depends(require_admin)):
+        result = {}
+        for domain in ('chat', 'download'):
+            try:
+                result[domain] = state.global_enabled(domain)
+            except RuntimeError:
+                result[domain] = None
+        from jmbot.domain_state import DomainState
+        result['deliveries'] = state.delivery_status() if isinstance(state, DomainState) else []
+        return result
+
+    @app.post('/api/policies/disable-all')
+    def disable_all(_: int = Depends(require_admin)):
+        outcomes = {}
+        for domain in ('chat', 'download'):
+            try:
+                state.set_global_enabled(domain, False)
+                outcomes[domain] = {'desired': False, 'applied': True}
+            except Exception:
+                outcomes[domain] = {'desired': False, 'applied': None}
+        return {'domains': outcomes, 'applied': all(item['applied'] is True for item in outcomes.values())}
+
+    @app.get('/api/download/scopes')
+    def download_scopes(_: int = Depends(require_admin)):
+        return getattr(state, 'download', state).list_policies()
 
     @app.patch("/api/policies/global/{kind}")
-    async def patch_global_policy(kind: str, body: GlobalPolicyBody, _: int = Depends(require_admin)) -> dict[str, bool]:
+    def patch_global_policy(kind: str, body: GlobalPolicyBody, _: int = Depends(require_admin)) -> dict[str, bool]:
         try:
             state.set_global_enabled(kind, body.enabled)
-            if kind == "chat" and chat_store is not None:
-                chat_store.set_chat_enabled(body.enabled)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {kind: body.enabled}
 
     @app.get("/api/persona/default")
-    async def get_default_persona(_: int = Depends(require_admin)) -> dict[str, Any]:
+    def get_default_persona(_: int = Depends(require_admin)) -> dict[str, Any]:
         name, prompt, version = state.get_default_persona("大肥鱼", "")
         return {"name": name, "prompt": prompt, "version": version}
 
@@ -643,7 +799,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"ok": True}
 
     @app.put("/api/persona/default")
-    async def put_default_persona(body: GlobalPersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def put_default_persona(body: GlobalPersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             version = state.set_default_persona(body.name, body.prompt, expected_version=body.expected_version)
         except ValueError as exc:
@@ -651,10 +807,15 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"version": version}
 
     @app.patch("/api/scopes/{kind}/{owner_id}/policy")
-    async def patch_policy(kind: str, owner_id: int, body: PolicyBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def patch_policy(kind: str, owner_id: int, body: PolicyBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         changes = {key: value for key, value in body.dict().items() if value is not None}
+        expected_version = changes.pop("expected_version", None)
         scope = Scope(kind, owner_id)
-        current = state.get_policy(scope)
+        if changes and all(key.startswith('download_') for key in changes):
+            policy = state.set_policy(scope, **changes)
+            store = getattr(state, 'download', state)
+            return {"policy": policy.__dict__, "policy_version": store.policy_version(scope), "applied": True}
+        current = getattr(state, 'chat', state).get_policy(scope)
         requested_default = changes.get("use_default_key", current.use_default_key)
         if chat_store is not None:
             requested_default = (
@@ -668,7 +829,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             if not chat_store.has_scope_credentials("group", owner_id):
                 raise HTTPException(status_code=400, detail="群聊启用聊天前必须配置独立 API Key")
         try:
-            policy = state.set_policy(scope, **changes)
+            policy = state.set_policy(scope, expected_version=expected_version, **changes)
             if chat_store is not None and "use_default_key" in changes:
                 if kind == "private":
                     chat_store.set_private_default_inheritance(owner_id, bool(changes["use_default_key"]))
@@ -676,10 +837,10 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
                     chat_store.set_group_default_inheritance(owner_id, bool(changes["use_default_key"]))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"policy": policy.__dict__}
+        return {"policy": policy.__dict__, "policy_version": state.policy_version(scope), "applied": True}
 
     @app.put("/api/scopes/{kind}/{owner_id}/persona")
-    async def put_persona(kind: str, owner_id: int, body: PersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def put_persona(kind: str, owner_id: int, body: PersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             version = state.set_base_persona(Scope(kind, owner_id), body.prompt, expected_version=body.expected_version)
         except ValueError as exc:
@@ -689,7 +850,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         )}
 
     @app.post("/api/scopes/{kind}/{owner_id}/growth")
-    async def add_growth(kind: str, owner_id: int, body: GrowthBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def add_growth(kind: str, owner_id: int, body: GrowthBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             entry = state.add_growth(Scope(kind, owner_id), body.category, body.content, body.evidence)
         except ValueError as exc:
@@ -697,7 +858,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"entry": entry.__dict__}
 
     @app.post("/api/growth/{entry_id}/freeze")
-    async def freeze_growth(entry_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def freeze_growth(entry_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             state.set_growth_frozen(entry_id, True)
         except KeyError as exc:
@@ -705,7 +866,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"ok": True}
 
     @app.delete("/api/growth/{entry_id}/freeze")
-    async def unfreeze_growth(entry_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def unfreeze_growth(entry_id: int, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             state.set_growth_frozen(entry_id, False)
         except KeyError as exc:
@@ -713,7 +874,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"ok": True}
 
     @app.patch("/api/growth/{entry_id}")
-    async def edit_growth(entry_id: int, body: GrowthEditBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def edit_growth(entry_id: int, body: GrowthEditBody, _: int = Depends(require_admin)) -> dict[str, Any]:
         try:
             entry = state.edit_growth(entry_id, content=body.content, evidence=body.evidence)
         except KeyError as exc:
@@ -723,26 +884,70 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"entry": entry.__dict__}
 
     @app.post("/api/scopes/{kind}/{owner_id}/growth/rollback/{version}")
-    async def rollback_growth(kind: str, owner_id: int, version: int, _: int = Depends(require_admin)) -> dict[str, Any]:
+    def rollback_growth(kind: str, owner_id: int, version: int, _: int = Depends(require_admin)) -> dict[str, Any]:
         return {"deactivated": state.rollback_growth(Scope(kind, owner_id), version)}
 
     @app.get("/api/stickers/template")
     async def sticker_template(_: int = Depends(require_admin)) -> Response:
-        return Response(stickers.template_bytes(), media_type="application/zip", headers={"Content-Disposition": "attachment; filename=sticker-template.zip"})
+        content = await asyncio.to_thread(stickers.template_bytes)
+        if isinstance(content, dict):
+            import base64
+            content = base64.b64decode(content["__bytes__"])
+        return Response(content, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=sticker-template.zip"})
 
     @app.post("/api/stickers/import")
     async def sticker_import(request: Request, _: int = Depends(require_admin)) -> dict[str, Any]:
-        destination = stickers.catalog_dir / ".upload.zip"
+        raise HTTPException(409, '请先预览，再通过确认接口提交表情包')
+
+    @app.post('/api/stickers/preview')
+    async def preview_stickers(request: Request, _: int = Depends(require_admin)):
+        import base64
         content = await request.body()
         if not content or len(content) > 32 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="上传包为空或超过 32 MiB")
-        destination.write_bytes(content)
+            raise HTTPException(413, '上传包为空或超过 32 MiB')
         try:
-            return stickers.import_zip(destination)
-        except StickerImportError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        finally:
-            destination.unlink(missing_ok=True)
+            return await asyncio.to_thread(stickers.preview_bytes, base64.b64encode(content).decode())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    @app.post('/api/stickers/confirm')
+    async def confirm_stickers(request: Request, _: int = Depends(require_admin)):
+        body = await request.json()
+        try:
+            return await asyncio.to_thread(stickers.confirm_preview, body['preview_token'], body['sha256'], body.get('scope', 'global'), body.get('edits'))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(400, '无效或过期的预览，请重新上传') from None
+
+    @app.post('/api/stickers/draft')
+    def draft_stickers(body: dict, _: int = Depends(require_admin)):
+        if native_client is None:
+            raise HTTPException(409, '原生聊天服务未配置')
+        from jmbot.service_rpc import RPCClient
+        client = RPCClient(native_client.url, native_client.token, timeout=100)
+        return client.call('draft', 'generate', body['preview_token'], body['sha256'], body['scope'])
+
+    @app.get('/api/stickers')
+    def sticker_catalog(_: int = Depends(require_admin)):
+        return stickers.catalog()
+
+    @app.patch('/api/stickers/{sticker_id}')
+    def review_sticker(sticker_id: int, body: dict, _: int = Depends(require_admin)):
+        try:
+            return stickers.review(sticker_id, body)
+        except ValueError:
+            raise HTTPException(400, '表情审核字段或作用域无效') from None
+
+    @app.get('/api/help/jm/versions')
+    async def help_versions(_: int = Depends(require_admin)):
+        return admins.help_versions()
+
+    @app.post('/api/help/jm/restore/{version}')
+    async def restore_help(version: int, _: int = Depends(require_admin)):
+        try:
+            admins.restore_help(version)
+        except ValueError:
+            raise HTTPException(404, '帮助版本不存在') from None
+        return {'ok': True, 'content': admins.get_help()}
 
     @app.get("/api/help/jm")
     async def get_help(_: int = Depends(require_admin)) -> dict[str, str]:
@@ -778,18 +983,36 @@ def main() -> None:
         AdminStore(admin_db).set_password(args.set_password, password, is_super=args.set_password == SUPER_ADMIN_ID)
         print(f"已设置 QQ {args.set_password} 的后台密码")
         return
+    split = os.environ.get("JM_BOT_CHAT_BACKEND") == "maibot"
+    options = {}
+    if split:
+        from jmbot.service_rpc import RPCClient, RemoteStore
+        service_token = os.environ["JM_BOT_SERVICE_TOKEN"]
+        chat_client = RPCClient(os.environ.get("JM_BOT_CHAT_SERVICE_URL", "http://127.0.0.1:8082"), service_token, timeout=35)
+        from jmbot.domain_state import DomainState
+        download_client = RPCClient(os.environ.get("JM_BOT_DOWNLOAD_SERVICE_URL", "http://127.0.0.1:8080"), service_token)
+        options = {"state_store": DomainState(RemoteStore(chat_client, "state"), RemoteStore(download_client, "download_state"), admin_db.with_name('policy-delivery.sqlite3')),
+                   "sticker_store": RemoteStore(chat_client, "stickers"),
+                   "download_client": download_client, "native_client": chat_client}
+        chat_store = RemoteStore(chat_client, "credentials")
+    else:
+        chat_store = ChatStore(os.environ.get("JM_BOT_CHAT_DB", "data/chat.sqlite3"),
+                               master_key_path=os.environ.get("JM_BOT_CHAT_MASTER_KEY_PATH", "data/chat-master.key"))
     app = create_admin_app(
         admin_db=admin_db,
         conversation_db=os.environ.get("JM_BOT_CONVERSATION_DB", "data/conversation.sqlite3"),
         sticker_dir=os.environ.get("JM_BOT_STICKER_DIR", "data/stickers"),
-        chat_store=ChatStore(
-            os.environ.get("JM_BOT_CHAT_DB", "data/chat.sqlite3"),
-            master_key_path=os.environ.get("JM_BOT_CHAT_MASTER_KEY_PATH", "data/chat-master.key"),
-        ),
+        chat_store=chat_store,
         queue_db_path=os.environ.get("JM_BOT_QUEUE_DB", "data/queue.sqlite3"),
         default_provider=os.environ.get("JM_BOT_CHAT_DEFAULT_PROVIDER", "ds_school").strip().lower(),
         fallback_default_key_configured=bool(os.environ.get("JM_BOT_CHAT_DEFAULT_API_KEY", "").strip()),
+        **options,
     )
+    if split:
+        from jmbot.business_api import ADMIN_METHODS
+        from jmbot.service_rpc import mount_rpc
+        mount_rpc(app, token=service_token, ledger=admin_db.with_name("admin-rpc.sqlite3"),
+                  targets={"admin": app.state.admin_store}, allowed={"admin": ADMIN_METHODS})
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("JM_BOT_ADMIN_PORT", "8081")), log_level="info")
 
 

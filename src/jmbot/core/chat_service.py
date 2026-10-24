@@ -305,7 +305,7 @@ class ChatStore:
 
     def stage_credential_update(
         self, actor_id: int, scope: str, owner_id: int, provider: str, api_key: str,
-        *, ttl_seconds: int = 300,
+        *, ttl_seconds: int = 300, policy_version: int | None = None,
     ) -> None:
         normalized = api_key.strip()
         if not normalized:
@@ -322,13 +322,19 @@ class ChatStore:
                 "base_version=excluded.base_version, expires_at=excluded.expires_at",
                 (pending_key, actor_id, scope, owner_id, provider, encrypted, str(version[0]) if version else "0", f"+{ttl_seconds} seconds"),
             )
+            connection.execute('UPDATE chat_pending_credentials SET policy_version=? WHERE pending_key=?', (policy_version, pending_key))
 
     def apply_pending_credential_update(
-        self, actor_id: int, scope: str, owner_id: int
+        self, actor_id: int, scope: str, owner_id: int, *, provider: str | None = None, policy_version: int | None = None
     ) -> tuple[bool, str | None]:
         pending_key = f"pending_credential:{actor_id}:{scope}:{owner_id}"
         version_key = f"credential_version:{scope}:{owner_id}"
         with self._connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            binding = connection.execute('SELECT provider,policy_version FROM chat_pending_credentials WHERE pending_key=?', (pending_key,)).fetchone()
+            if binding and ((provider is not None and binding[0] != provider) or (binding[1] is not None and binding[1] != policy_version)):
+                connection.execute('DELETE FROM chat_pending_credentials WHERE pending_key=?', (pending_key,))
+                return False, None
             row = connection.execute(
                 "SELECT provider, api_key, base_version, expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
                 "FROM chat_pending_credentials WHERE pending_key=? AND actor_id=? AND scope=? AND owner_id=?",
@@ -347,7 +353,14 @@ class ChatStore:
                 connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
                 return False, None
             connection.execute("DELETE FROM chat_pending_credentials WHERE pending_key=?", (pending_key,))
-        self.replace_scope_credential(scope, owner_id, str(provider), api_key)
+            legacy_table, legacy_column = ('private_api_keys', 'user_id') if scope == 'private' else ('group_api_keys', 'group_id')
+            connection.execute('DELETE FROM chat_credentials WHERE scope=? AND owner_id=?', (scope, owner_id))
+            connection.execute(f'DELETE FROM {legacy_table} WHERE {legacy_column}=?', (owner_id,))
+            connection.execute("INSERT INTO chat_credentials(scope,owner_id,provider,api_key,updated_at) VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))", (scope, owner_id, provider, encrypted))
+            for setting, value in ((f'default_key:{scope}:{owner_id}', '0'), (f'active_provider:{scope}:{owner_id}', provider), (version_key, str(int(current_version) + 1))):
+                connection.execute('INSERT INTO chat_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (setting, value))
+            if scope == 'group':
+                connection.execute('UPDATE group_runtime_state SET balance_exhausted=0,last_error=NULL WHERE group_id=?', (owner_id,))
         return True, str(provider)
 
     def cancel_pending_credential_update(self, actor_id: int, scope: str, owner_id: int) -> bool:
@@ -833,6 +846,10 @@ class ChatStore:
         self._migrate_legacy_credentials()
 
     def _migrate_legacy_credentials(self) -> None:
+        with self._connection() as connection:
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(chat_pending_credentials)')}
+            if 'policy_version' not in columns:
+                connection.execute('ALTER TABLE chat_pending_credentials ADD COLUMN policy_version INTEGER')
         legacy_tables = (
             ("private_api_keys", "user_id", "private"),
             ("group_api_keys", "group_id", "group"),
