@@ -281,8 +281,17 @@
         };
       } catch (error) { note(error.message); }
     };
-    const delivery = document.createElement('pre'); $('save-global').after(delivery);
-    loadGlobalPolicy = async () => { const data = await api('/api/policies/global'); for (const name of ['chat', 'download']) { $('global-' + name).indeterminate = data[name] === null; if (data[name] !== null) $('global-' + name).checked = data[name]; } delivery.textContent = JSON.stringify(data.deliveries || [], null, 2); };
+    const delivery = document.createElement('p'); delivery.className = 'muted'; $('save-global').after(delivery);
+    function describeDelivery(rows) {
+      if (!rows || !rows.length) return "应用状态：聊天、下载均已应用当前开关（无待同步变更）。";
+      return "应用状态：" + rows.map((row) => {
+        const domain = row.domain === "chat" ? "聊天" : "下载";
+        const scope = row.scope === "*" ? "全局" : row.scope.replace(":", " ");
+        const state = row.applied === true ? "已应用" : row.applied === false ? `未应用${row.error ? `（${row.error === "version_conflict_or_invalid_policy" ? "版本冲突或策略无效" : row.error}）` : ""}` : "待确认";
+        return `${domain}/${scope}：${state}`;
+      }).join("；");
+    }
+    loadGlobalPolicy = async () => { const data = await api('/api/policies/global'); for (const name of ['chat', 'download']) { $('global-' + name).indeterminate = data[name] === null; if (data[name] !== null) $('global-' + name).checked = data[name]; } delivery.textContent = describeDelivery(data.deliveries); };
     $('save-global').onclick = async () => { const results = await Promise.allSettled(['chat', 'download'].map(name => api('/api/policies/global/' + name, {method:'PATCH',body:JSON.stringify({enabled:$('global-' + name).checked})}))); note(results.map((value,index) => ['聊天','下载'][index] + (value.status === 'fulfilled' ? '已应用' : '待确认')).join('；')); await loadGlobalPolicy(); };
     $('login-qr-state').textContent = '';
     const qrState = document.createElement('p'); qrState.className = 'muted';
