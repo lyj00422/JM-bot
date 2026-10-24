@@ -26,6 +26,18 @@ async def run():
     config.bot.platform = 'qq'
     config.bot.nickname = '大肥鱼'
     config.personality.personality = context['persona']
+    config.personality.behavior_style = os.environ.get('JM_BOT_BEHAVIOR_STYLE') or (
+        '你在群里和私聊里都是个有聊天欲的普通群友：听懂了话题、也有想说的，就主动接一句，不用等别人 @ 你；'
+        '局面冷下来时，可以自己起个话题、分享刚看到的事或问一句。每次只说一两句，别连续自说自话、别刷屏、别硬凑。'
+        '有人认真求助或情绪低落时，先把话接住、认真回应。不编造没发生过的经历，不重复用过的梗。'
+    )
+    timing = config.chat.reply_timing
+    timing.talk_value = float(os.environ.get('JM_BOT_TALK_VALUE', '1'))
+    timing.private_talk_value = float(os.environ.get('JM_BOT_PRIVATE_TALK_VALUE', '1'))
+    timing.message_debounce_mode = os.environ.get('JM_BOT_DEBOUNCE_MODE', 'fast')
+    timing.no_action_backoff_base_seconds = float(os.environ.get('JM_BOT_NO_ACTION_BACKOFF_BASE', '8'))
+    timing.no_action_backoff_cap_seconds = float(os.environ.get('JM_BOT_NO_ACTION_BACKOFF_CAP', '90'))
+    timing.max_consecutive_wait_count = int(os.environ.get('JM_BOT_MAX_CONSECUTIVE_WAIT', '2'))
     config.maim_message.enabled = False
     config.webui.enabled = False
     config.debug.enable_console_input = False
