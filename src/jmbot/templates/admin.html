@@ -370,6 +370,19 @@
           const name = document.createElement("div");
           name.textContent = scopeLabel(entry.kind, entry.owner, entry.name, entry.remark) + (entry.policy ? "" : "（未配置）");
           const controls = document.createElement("div"); controls.className = "row";
+          const chatBox = document.createElement("label"); chatBox.className = "check";
+          const chatInput = document.createElement("input"); chatInput.type = "checkbox";
+          chatInput.checked = policy.chat_enabled === undefined ? entry.kind === "private" : Boolean(policy.chat_enabled);
+          chatInput.onchange = async () => {
+            chatInput.disabled = true;
+            try {
+              await api(`/api/scopes/${entry.kind}/${entry.owner}/policy`, { method: "PATCH", body: JSON.stringify({ chat_enabled: chatInput.checked }) });
+              note(`${scopeLabel(entry.kind, entry.owner, entry.name, entry.remark)}：聊天功能${chatInput.checked ? "已开启" : "已关闭"}`);
+              await loadPersonaScopes();
+            } catch (error) { chatInput.checked = !chatInput.checked; note(error.message); }
+            finally { chatInput.disabled = false; }
+          };
+          chatBox.append(chatInput, document.createTextNode("允许聊天"));
           const defaultBox = document.createElement("label"); defaultBox.className = "check";
           const defaultInput = document.createElement("input"); defaultInput.type = "checkbox";
           defaultInput.checked = policy.default_persona === undefined ? true : Boolean(policy.default_persona);
@@ -383,7 +396,7 @@
           const edit = document.createElement("button"); edit.textContent = "编辑人设";
           const editor = document.createElement("div"); editor.hidden = true;
           edit.onclick = () => openPersonaEditor(entry.kind, entry.owner, editor);
-          controls.append(defaultBox, growthBox, edit);
+          controls.append(chatBox, defaultBox, growthBox, edit);
           row.append(name, controls);
           box.append(row, editor);
         });
