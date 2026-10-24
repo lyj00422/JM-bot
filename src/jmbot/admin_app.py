@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sqlite3
 import time
@@ -505,29 +506,54 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             raise HTTPException(status_code=403, detail="只有超级管理员可以管理管理员账号")
         return qq_id
 
+    def _napcat_view(state: dict, *, refreshed: bool = False) -> dict:
+        account = os.environ.get("JM_BOT_QQ_ACCOUNT", "").strip()
+        view = dict(state)
+        view["account"] = account
+        if not state.get("configured"):
+            view["message"] = "尚未配置 NapCat WebUI 地址或 token，无法读取登录状态。"
+            return view
+        if state.get("isLogin"):
+            # NapCat keeps returning the previous, expired QR payload after a
+            # successful login; it is meaningless while the account is online.
+            view["qrcodeurl"] = None
+            view["loginError"] = None
+            if state.get("isOffline"):
+                view["message"] = f"QQ（{account}）已登录，但当前处于离线状态，请检查网络；无需重新扫码。"
+            elif refreshed:
+                view["message"] = f"QQ（{account}）已登录，无需二维码。登录失效后再点「获取二维码」即可。"
+            else:
+                view["message"] = f"QQ（{account}）已登录，无需二维码；登录失效后可点「获取二维码」重新扫码登录。"
+        else:
+            view["message"] = "QQ 未登录，请用手机 QQ 扫描下方二维码登录。"
+            reason = str(state.get("loginError") or "").strip()
+            if reason:
+                view["message"] += f"（NapCat 提示：{reason}）"
+        return view
+
     @app.get('/api/napcat/login')
     def napcat_login(_: int = Depends(require_admin)):
-        return napcat_admin.login_state()
+        return _napcat_view(napcat_admin.login_state())
 
     @app.post('/api/napcat/login/refresh')
     def napcat_refresh(_: int = Depends(require_admin)):
         try:
-            return napcat_admin.login_state(refresh=True)
+            return _napcat_view(napcat_admin.login_state(refresh=True), refreshed=True)
         except RuntimeError:
             # NapCat answers "QQ Is Logined" when a refresh is requested while
             # the account is online; report the real state instead of an error.
-            state = napcat_admin.login_state()
-            if state.get('isLogin'):
-                state['refresh'] = 'already_logged_in'
-            return state
+            return _napcat_view(napcat_admin.login_state(), refreshed=True)
 
     @app.get('/api/napcat/login/qr')
     def napcat_qr(_: int = Depends(require_admin)):
         import io
         import qrcode
-        value = napcat_admin.login_state().get('qrcodeurl')
+        state = napcat_admin.login_state()
+        if state.get("isLogin"):
+            raise HTTPException(409, "QQ 已登录，无需二维码")
+        value = state.get("qrcodeurl")
         if not isinstance(value, str) or not value or len(value) > 4096:
-            raise HTTPException(409, '当前没有可用登录二维码')
+            raise HTTPException(409, "暂无可用二维码，请先点「获取二维码」")
         output = io.BytesIO()
         qrcode.make(value).save(output, format='PNG')
         return Response(output.getvalue(), media_type='image/png')
