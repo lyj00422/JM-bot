@@ -623,6 +623,17 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     async def download_actions(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
         return admins.control_actions()
 
+    @app.get("/api/roster")
+    async def qq_roster(_: int = Depends(require_admin)) -> dict[str, Any]:
+        if download_client is None:
+            raise HTTPException(status_code=503, detail="下载服务未连接")
+        data = dict(await asyncio.to_thread(download_client.call, "qq", "roster"))
+        account = os.environ.get("JM_BOT_QQ_ACCOUNT", "").strip()
+        data["account"] = account
+        if account:
+            data["friends"] = [friend for friend in data.get("friends", []) if str(friend.get("user_id")) != account]
+        return data
+
     @app.get("/api/download/queue")
     async def download_queue(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
         if download_client is not None:

@@ -85,10 +85,21 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
                 return await get_bot(str(account)).call_api('get_status')
             return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(10)
 
+        def roster(self):
+            import os as _os
+            from nonebot import get_bot
+            account = _os.environ.get('JM_BOT_QQ_ACCOUNT', '')
+            async def invoke():
+                bot = get_bot(account)
+                friends = await bot.call_api('get_friend_list')
+                groups = await bot.call_api('get_group_list')
+                return {'friends': friends or [], 'groups': groups or []}
+            return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(20)
+
     transport = QQTransport()
     @driver.on_startup
     async def capture_loop():
         transport.loop = asyncio.get_running_loop()
     mount_rpc(app, token=token, ledger=Path(queue_path).with_name('download-rpc.sqlite3'),
               targets={'download': DownloadControl(queue), 'download_state': state, 'qq': transport},
-              allowed={'download': {'snapshot'}, 'download_state': {'get_policy', 'set_policy', 'has_policy', 'list_policies', 'global_enabled', 'set_global_enabled', 'permitted', 'policy_version'}, 'qq': {'send', 'send_configuration', 'media', 'status'}})
+              allowed={'download': {'snapshot'}, 'download_state': {'get_policy', 'set_policy', 'has_policy', 'list_policies', 'global_enabled', 'set_global_enabled', 'permitted', 'policy_version'}, 'qq': {'send', 'send_configuration', 'media', 'status', 'roster'}})
