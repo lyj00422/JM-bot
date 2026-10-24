@@ -738,6 +738,8 @@ async def _control_action_worker() -> None:
                     result = {"job_id": job_id, "changed": changed}
                 elif action["name"] == "download_clear":
                     result = {"canceled": ALBUM_QUEUE.clear_pending()}
+                elif action["name"] == "download_clear_finished":
+                    result = {"deleted": ALBUM_QUEUE.clear_finished()}
                 elif action["name"] == "download_priority":
                     job_id = int(payload["job_id"])
                     job = ALBUM_QUEUE.move_to_front(job_id)

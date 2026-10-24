@@ -346,7 +346,7 @@ class AdminStore:
         return str(row[0]) if row else "发送 /jm help 查看下载帮助。"
 
     def queue_control_action(self, name: str, payload: dict[str, Any] | None = None) -> int:
-        if name not in {"download_cancel", "download_clear", "download_priority", "download_delete_failed"}:
+        if name not in {"download_cancel", "download_clear", "download_clear_finished", "download_priority", "download_delete_failed"}:
             raise ValueError("unsupported control action")
         now = time.time()
         with self._connection() as conn:
@@ -656,6 +656,13 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         if queue_db_path is None:
             raise HTTPException(status_code=503, detail="下载队列未连接")
         action_id = admins.queue_control_action("download_clear")
+        return {"ok": True, "pending": True, "action_id": action_id}
+
+    @app.post("/api/download/queue/clear-finished")
+    async def clear_finished_downloads(_: int = Depends(require_admin)) -> dict[str, Any]:
+        if queue_db_path is None:
+            raise HTTPException(status_code=503, detail="下载队列未连接")
+        action_id = admins.queue_control_action("download_clear_finished")
         return {"ok": True, "pending": True, "action_id": action_id}
 
     @app.post("/api/download/queue/{job_id}/priority")

@@ -469,6 +469,15 @@ class PersistentAlbumQueue:
             )
             return cursor.rowcount
 
+    def clear_finished(self) -> int:
+        """Delete finished history rows; active jobs are never touched."""
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "DELETE FROM album_queue WHERE status IN ('done', 'canceled')"
+            )
+            return cursor.rowcount
+
     def admin_cancel_album(
         self,
         album_id: str,
