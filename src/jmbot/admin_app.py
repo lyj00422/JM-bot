@@ -511,7 +511,15 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
 
     @app.post('/api/napcat/login/refresh')
     def napcat_refresh(_: int = Depends(require_admin)):
-        return napcat_admin.login_state(refresh=True)
+        try:
+            return napcat_admin.login_state(refresh=True)
+        except RuntimeError:
+            # NapCat answers "QQ Is Logined" when a refresh is requested while
+            # the account is online; report the real state instead of an error.
+            state = napcat_admin.login_state()
+            if state.get('isLogin'):
+                state['refresh'] = 'already_logged_in'
+            return state
 
     @app.get('/api/napcat/login/qr')
     def napcat_qr(_: int = Depends(require_admin)):
