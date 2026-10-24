@@ -77,7 +77,7 @@
         <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state" class="muted">读取 NapCat 登录状态；掉线时点「获取二维码」扫码登录。</div></div><button id="refresh-status">刷新</button></section>
         <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
         <section class="section" id="page-credentials"><h1>API Key</h1><p class="muted">Key 保存后只显示配置状态。会话使用默认 Key 时，保存独立 Key 会切换到独立配置。</p><div id="credential-list"></div><div class="panel"><h2>设置默认 Key</h2><div class="grid"><label>默认服务商<select id="default-provider"><option value="ds_school">学校</option><option value="ds_official">DS 官方</option><option value="glm_school">学校 GLM</option><option value="glm_official">GLM 官方</option><option value="kimi_school">学校 Kimi</option><option value="kimi_official">Kimi 官方</option><option value="qwen_school">学校 Qwen</option><option value="qwen_official">Qwen 官方</option></select></label><label>默认 API Key<input id="default-key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-default-key" class="primary">保存默认 Key</button></p></div><div class="panel"><h2>设置会话 Key</h2><div class="grid"><label>会话类型<select id="key-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="key-owner" inputmode="numeric"></label><label>服务商<select id="key-provider"><option value="ds_official">DS 官方</option><option value="ds_school">学校 DS</option><option value="glm_official">GLM 官方</option><option value="glm_school">学校 GLM</option><option value="kimi_official">Kimi 官方</option><option value="kimi_school">学校 Kimi</option><option value="qwen_official">Qwen 官方</option><option value="qwen_school">学校 Qwen</option></select></label><label>API Key<input id="key-value" type="password" autocomplete="new-password"></label></div><p><button id="save-key" class="primary">保存 Key</button></p></div></section>
-        <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
+        <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话开关</h2><p class="muted">按群聊/私聊控制「使用默认人设」和「角色成长」，勾选后立即生效。</p><div id="persona-scope-list" class="muted">加载中…</div><p><button id="refresh-persona-scopes">刷新会话列表</button></p></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
         <section class="section" id="page-download"><h1>JM 下载管理</h1><div class="panel"><h2>/jm help 回复</h2><label>帮助文本<textarea id="help-text"></textarea></label><button id="save-help" class="primary">保存帮助文本</button></div><div class="panel"><h2>会话权限</h2><div class="grid"><label>类型<select id="download-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="download-owner" inputmode="numeric"></label></div><p><button id="add-download-scope" class="primary">添加会话</button></p><div id="download-status"></div></div><div class="panel"><h2>下载队列</h2><div class="row"><button id="refresh-queue">刷新队列</button><button id="clear-queue" class="danger">清空待处理</button><button id="clear-finished" class="danger">清空已完成</button><label class="check"><input id="show-finished" type="checkbox">显示已完成</label></div><div id="queue-actions" class="muted"></div><div id="download-queue"></div></div></section>
         <section class="section" id="page-stickers"><h1>表情包库</h1><p><a href="/api/stickers/template">下载导入模板 ZIP</a></p><div class="panel"><label>表情包 ZIP<input id="sticker-file" type="file" accept=".zip,application/zip"></label><p><button id="upload-stickers" class="primary">上传并追加到库</button></p></div><div id="sticker-result"></div></section>
         <section class="section" id="page-admins"><h1>管理员账号</h1><div id="admin-list"></div><div class="grid panel"><label>管理员 QQ<input id="new-admin-qq" inputmode="numeric"></label><label>设置后台密码<input id="new-admin-password" type="password" autocomplete="new-password"></label></div><p><button id="add-admin" class="primary">添加管理员</button></p></section>
@@ -101,7 +101,7 @@
     async function enterApp() { me = await api("/api/me"); $("identity").textContent = `QQ ${me.qq_id}`; $("admin-nav").hidden = !me.is_super; $("login").hidden = true; $("app").hidden = false; await Promise.all([loadStatus(), loadApprovals("pending"), loadHelp(), loadDefaultPersona(), loadGlobalPolicy(), loadQr()]); }
     $("login-form").addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await api("/api/login", { method: "POST", body: JSON.stringify({ qq_id: Number(form.get("qq_id")), password: form.get("password") }) }); await enterApp(); } catch (error) { note(error.message); } });
     $("logout").onclick = async () => { await api("/api/logout", { method: "POST" }); showLogin(); };
-    $("nav").addEventListener("click", (event) => { const button = event.target.closest("button[data-page]"); if (!button) return; document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${button.dataset.page}`)); if (button.dataset.page === "admins") loadAdmins(); if (button.dataset.page === "credentials") loadCredentials(); if (button.dataset.page === "download") { loadDownloadStatus(); loadDownloadQueue(); loadHelp(); } });
+    $("nav").addEventListener("click", (event) => { const button = event.target.closest("button[data-page]"); if (!button) return; document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${button.dataset.page}`)); if (button.dataset.page === "admins") loadAdmins(); if (button.dataset.page === "credentials") loadCredentials(); if (button.dataset.page === "download") { loadDownloadStatus(); loadDownloadQueue(); loadHelp(); } if (button.dataset.page === "persona") loadPersonaScopes(); });
     async function loadStatus() { try { const data = await api("/api/status"); $("services").innerHTML = Object.entries(data.services).map(([name, value]) => `<div class="item"><div>${escapeHtml(name)}<small>${escapeHtml(value.detail || "")}</small></div><span class="status ${value.healthy ? "ok" : "bad"}">${value.healthy ? "在线" : "离线"}</span></div>`).join("") || "<p class='muted'>暂无服务心跳</p>"; } catch (error) { note(error.message); } }
     $("refresh-status").onclick = loadStatus;
     setInterval(() => { if (!$("app").hidden) loadStatus(); }, 15000);
@@ -256,6 +256,43 @@
       } catch (error) { note(error.message); }
     };
     $("add-download-scope").onclick = async () => { try { await api(`/api/scopes/${$("download-kind").value}/${$("download-owner").value}/policy`, { method: "PATCH", body: JSON.stringify({ download_enabled: false }) }); await loadDownloadStatus(); note("会话已添加，当前权限关闭"); } catch (error) { note(error.message); } };
+    async function loadPersonaScopes() {
+      try {
+        const rows = await api("/api/scopes");
+        const box = $("persona-scope-list");
+        box.replaceChildren();
+        if (!rows.length) { box.textContent = "还没有已配置的会话。先在群里发条消息，或在「下载」页添加会话。"; return; }
+        rows.forEach((scope) => {
+          const [kind, owner] = String(scope.scope_key).split(":");
+          const row = document.createElement("div"); row.className = "item";
+          const name = document.createElement("div");
+          name.textContent = `${kind === "group" ? "群聊" : "私聊"} ${owner}`;
+          const controls = document.createElement("div"); controls.className = "row";
+          for (const [field, title] of [["default_persona", "使用默认人设"], ["growth_enabled", "开启角色成长"]]) {
+            const label = document.createElement("label"); label.className = "check";
+            const input = document.createElement("input"); input.type = "checkbox"; input.checked = Boolean(scope[field]);
+            input.onchange = async () => {
+              input.disabled = true;
+              try {
+                await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify({ [field]: input.checked }) });
+                note(`${name.textContent}：${title}${input.checked ? "已开启" : "已关闭"}`);
+              } catch (error) {
+                input.checked = !input.checked;
+                note(error.message);
+              } finally { input.disabled = false; }
+            };
+            label.append(input, document.createTextNode(title));
+            controls.append(label);
+          }
+          const edit = document.createElement("button"); edit.textContent = "编辑人设";
+          edit.onclick = () => { $("scope-kind").value = kind; $("scope-owner").value = owner; $("load-scope").click(); };
+          controls.append(edit);
+          row.append(name, controls);
+          box.append(row);
+        });
+      } catch (error) { note(error.message); }
+    }
+    $("refresh-persona-scopes").onclick = loadPersonaScopes;
     async function loadAdmins() { try { const rows = await api("/api/admins"); $("admin-list").textContent = rows.map((row) => `QQ ${row.qq_id}${row.is_super ? "（超级管理员）" : ""}${row.enabled ? "" : "（已停用）"}`).join("\n"); } catch (error) { note(error.message); } }
     $("add-admin").onclick = async () => { try { await api("/api/admins", { method: "POST", body: JSON.stringify({ qq_id: Number($("new-admin-qq").value), password: $("new-admin-password").value }) }); $("new-admin-password").value = ""; note("管理员已添加"); await loadAdmins(); } catch (error) { note(error.message); } };
     function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]); }
