@@ -68,6 +68,14 @@ class AdminAppTest(unittest.TestCase):
             self.assertEqual(rebased.status_code, 200, rebased.text)
             self.assertEqual(rebased.json()["persona_fields"]["seed_source"], "b")
 
+    def test_failed_login_does_not_lock_out_correct_credentials(self):
+        with TestClient(self.app) as client:
+            for _ in range(6):
+                response = client.post("/api/login", json={"qq_id": SUPER_ADMIN_ID, "password": "wrong-password"})
+                self.assertEqual(response.status_code, 401)
+            response = client.post("/api/login", json={"qq_id": SUPER_ADMIN_ID, "password": "a-strong-test-password"})
+            self.assertEqual(response.status_code, 200)
+
     def test_credentials_never_return_secret(self):
         self.assertTrue(self.chat.get_default_credential("ds_school"))
         self.assertNotIn("default-secret", str(self.app.openapi()))

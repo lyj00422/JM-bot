@@ -31,7 +31,7 @@ from jmbot.core.sticker_import import StickerImportError, StickerImporter
 
 
 SUPER_ADMIN_ID = 3065532050
-RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.21")
+RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.22")
 ALLOWED_PROVIDERS = {
     "ds_school", "ds_official", "glm_school", "glm_official",
     "kimi_school", "kimi_official", "qwen_school", "qwen_official",
@@ -69,10 +69,6 @@ class AdminStore:
                     token_hash TEXT PRIMARY KEY, qq_id INTEGER NOT NULL,
                     expires_at REAL NOT NULL, created_at REAL NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS login_failures (
-                    remote_addr TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0,
-                    window_started REAL NOT NULL, blocked_until REAL NOT NULL DEFAULT 0
-                );
                 CREATE TABLE IF NOT EXISTS approvals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, subject_id TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending', payload TEXT NOT NULL DEFAULT '{}',
@@ -102,6 +98,7 @@ class AdminStore:
                 );
                 """
             )
+            conn.execute("DROP TABLE IF EXISTS login_failures")
             action_columns = {row[1] for row in conn.execute("PRAGMA table_info(approval_actions)")}
             if "sub_type" not in action_columns:
                 conn.execute("ALTER TABLE approval_actions ADD COLUMN sub_type TEXT NOT NULL DEFAULT ''")
@@ -154,30 +151,6 @@ class AdminStore:
             token = secrets.token_urlsafe(32)
             conn.execute("INSERT INTO admin_sessions(token_hash,qq_id,expires_at,created_at) VALUES(?,?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), qq_id, time.time() + ttl, time.time()))
             return token
-
-    def login_blocked(self, remote_addr: str) -> bool:
-        with self._connection() as conn:
-            row = conn.execute("SELECT blocked_until FROM login_failures WHERE remote_addr=?", (remote_addr,)).fetchone()
-        return bool(row and float(row[0]) > time.time())
-
-    def record_login_failure(self, remote_addr: str) -> None:
-        now = time.time()
-        with self._connection() as conn:
-            row = conn.execute("SELECT failures,window_started FROM login_failures WHERE remote_addr=?", (remote_addr,)).fetchone()
-            failures, started = (int(row[0]), float(row[1])) if row else (0, now)
-            if now - started > 900:
-                failures, started = 0, now
-            failures += 1
-            blocked_until = now + 900 if failures >= 5 else 0
-            conn.execute(
-                "INSERT INTO login_failures(remote_addr,failures,window_started,blocked_until) VALUES(?,?,?,?) "
-                "ON CONFLICT(remote_addr) DO UPDATE SET failures=excluded.failures,window_started=excluded.window_started,blocked_until=excluded.blocked_until",
-                (remote_addr, failures, started, blocked_until),
-            )
-
-    def clear_login_failures(self, remote_addr: str) -> None:
-        with self._connection() as conn:
-            conn.execute("DELETE FROM login_failures WHERE remote_addr=?", (remote_addr,))
 
     def revoke_session(self, token: str | None) -> None:
         if not token:
@@ -619,15 +592,10 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         )
 
     @app.post("/api/login")
-    async def login(body: LoginBody, request: Request) -> Response:
-        remote_addr = request.client.host if request.client else "unknown"
-        if admins.login_blocked(remote_addr):
-            raise HTTPException(status_code=429, detail="登录失败次数过多，请 15 分钟后重试")
+    async def login(body: LoginBody) -> Response:
         token = admins.authenticate(body.qq_id, body.password)
         if token is None:
-            admins.record_login_failure(remote_addr)
             raise HTTPException(status_code=401, detail="QQ 号或密码错误")
-        admins.clear_login_failures(remote_addr)
         response = JSONResponse({"ok": True, "qq_id": body.qq_id})
         response.set_cookie("jmbot_session", token, httponly=True, samesite="strict", secure=False, max_age=3600)
         response.set_cookie("jmbot_csrf", hashlib.sha256(("csrf:" + token).encode()).hexdigest(), samesite="strict", max_age=3600)
