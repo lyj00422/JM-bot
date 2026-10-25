@@ -627,6 +627,38 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         value = status_provider() if status_provider else admins.service_status()
         return {"ok": True, "services": value, "super_admin": SUPER_ADMIN_ID}
 
+    @app.get('/api/management/links')
+    async def management_links(request: Request, _: int = Depends(require_admin)) -> dict[str, Any]:
+        """Return the real native management surfaces for the SSH connector.
+
+        The desktop script forwards three consecutive local ports: the JMbot
+        console, MaiBot WebUI and NapCat WebUI.  Deriving links from the
+        request port keeps fallback ports working without exposing a server
+        loopback address that the browser cannot reach.
+        """
+        import httpx
+        admin_port = request.url.port or int(os.environ.get('JM_BOT_ADMIN_PORT', '8081'))
+        base = f'http://127.0.0.1:{admin_port}'
+        native_port, napcat_port = admin_port + 1, admin_port + 2
+        async def probe(port: int, path: str = '/') -> bool:
+            try:
+                async with httpx.AsyncClient(timeout=1, trust_env=False) as client:
+                    response = await client.get(f'http://127.0.0.1:{port}{path}')
+                    return response.status_code < 500
+            except httpx.HTTPError:
+                return False
+        native_ok, napcat_ok = await asyncio.gather(probe(8001), probe(6099))
+        official = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_ENABLED', '').lower() in {'1', 'true', 'yes', 'on'}
+        return {
+            'console': {'label': 'JMbot 联合控制台', 'url': base, 'available': True},
+            'maibot': {'label': 'MaiBot 原生 WebUI', 'url': f'http://127.0.0.1:{native_port}', 'available': native_ok,
+                       'server_port': 8001, 'detail': '原生 runtime 尚未启动；收到授权消息后会自动启动' if not native_ok else '原生 WebUI 在线'},
+            'napcat': {'label': 'NapCat 原生 WebUI', 'url': f'http://127.0.0.1:{napcat_port}', 'available': napcat_ok,
+                       'server_port': 6099, 'detail': '等待 SSH 转发或 NapCat WebUI' if not napcat_ok else 'NapCat WebUI 在线'},
+            'chat_transport': 'official_snowluma' if official else 'legacy_native_worker',
+            'official_connector_enabled': official,
+        }
+
     @app.get("/api/download/actions")
     async def download_actions(_: int = Depends(require_admin)) -> list[dict[str, Any]]:
         return admins.control_actions()
@@ -899,9 +931,6 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             if "use_default_key" in changes:
                 requested_default = bool(changes["use_default_key"])
         requested_chat = changes.get("chat_enabled", current.chat_enabled)
-        if chat_store is not None and kind == "group" and requested_chat and not requested_default:
-            if not chat_store.has_scope_credentials("group", owner_id):
-                raise HTTPException(status_code=400, detail="群聊启用聊天前必须配置独立 API Key")
         try:
             policy = state.set_policy(scope, expected_version=expected_version, **changes)
             if chat_store is not None and "use_default_key" in changes:

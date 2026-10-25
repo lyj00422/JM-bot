@@ -12,8 +12,8 @@ python3 scripts/native_scope_spike.py
 
 - MaiBot 注册了 `maisaka.planner.before_request` 和 `maisaka.replyer.before_request`，两个 Hook 都不是可拒绝入口；它们的 `allow_abort` 为 `False`。
 - Planner 的人设和行为风格构建仍读取 `global_config.personality`；Replyer 的表达风格仍读取全局 `reply_style`。Hook 能追加或改写结构化请求内容，不能证明三个人设字段已经由 `session_id` 完整替换。
-- 当前 JMbot worker 关闭 MaiBot WebUI 和配置文件 watcher，并通过接入层的会话上下文提供有效人设。服务器没有 8001 MaiBot WebUI 监听。
-- 锁定仓库里没有可直接启用的官方 QQ/NapCat connector 实现；当前 `deploy/source-lock.json` 也明确记录 `official_connector_used: false`。现有收发仍是 JMbot 的 SplitAdapter/PlatformIO 接入。
+- 当前 JMbot worker 已恢复 MaiBot WebUI、配置文件 watcher 和插件运行时；实例启动时复制仓库 `plugins/`。本次代码已具备 8001 原生 WebUI 启动路径，但服务器必须完成重启后才有真实监听证据。
+- 已锁定并随仓库提供官方 `Mai-with-u/MaiBot-SnowLuma-Adapter` `1.1.8` 插件及其 `silk-python` 依赖。它要求 NapCat 正向 WebSocket 服务；当前服务器仍是反向客户端连 8080，官方 connector 尚未生产启用，旧 SplitAdapter 仍是回滚链。
 
 ## 合成隔离结果
 
@@ -26,9 +26,9 @@ python3 scripts/native_scope_spike.py
 | 后台模型队列 | 通过 | `src/jmbot/chat_app.py`：后台队列单独调度，供应商并发为 1 |
 | QQ 发送回执/重试 | 通过 | `tests/test_native_delivery.py`、`tests/test_napcat_media.py`：稳定 RPC ID、回执缺失时不自动重发 |
 | 表情来源和收藏归属 | 通过 | `tests/test_native_ingress.py`、`tests/test_native_delivery.py`：自动收藏按 scope，人工库显式选择 |
-| 原生三字段人设在 Planner/Replyer/工具/后台的实际 prompt | **未通过** | 当前接入仍将会话人设合并为一个 `personality` 字符串，缺少请求级三字段 provider 和脱敏请求捕获 |
+| 原生三字段人设在 Planner/Replyer/工具/后台的实际 prompt | **未通过** | 已扩展会话状态和 worker context，能携带 `personality`/`behavior_style`/`reply_style`；仍缺少请求级 provider 和脱敏请求捕获 |
 | 记忆、表达、黑话、Focus 的所有共享资源 | **未通过** | 原生 Hook/插件没有提供可审计的统一拒绝点；不能只依赖提示词防串群 |
-| 正式官方 QQ connector | **未通过** | 锁定版本未发现可部署实现，当前适配器仍为 JMbot 自写链 |
+| 正式官方 QQ connector | **未通过** | 官方 adapter 已纳入 release，但 NapCat 正向 WS、依赖和新旧链互斥尚未完成线上验证 |
 
 ## 结论和下一步
 

@@ -104,6 +104,12 @@ class ConversationStateStore:
                 CREATE TABLE IF NOT EXISTS conversation_personas (
                     scope_key TEXT PRIMARY KEY,
                     base_prompt TEXT NOT NULL,
+                    behavior_style TEXT NOT NULL DEFAULT '',
+                    reply_style TEXT NOT NULL DEFAULT '',
+                    seed_source TEXT NOT NULL DEFAULT 'imported',
+                    seed_source_revision TEXT NOT NULL DEFAULT '',
+                    seed_snapshot TEXT NOT NULL DEFAULT '{}',
+                    initialized_at REAL,
                     base_version INTEGER NOT NULL DEFAULT 1,
                     updated_at REAL NOT NULL
                 );
@@ -145,6 +151,17 @@ class ConversationStateStore:
                 conn.execute("ALTER TABLE conversation_policies ADD COLUMN download_blacklisted INTEGER NOT NULL DEFAULT 0")
             if "version" not in policy_columns:
                 conn.execute("ALTER TABLE conversation_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
+            persona_columns = {row[1] for row in conn.execute("PRAGMA table_info(conversation_personas)")}
+            for name, definition in {
+                'behavior_style': "TEXT NOT NULL DEFAULT ''",
+                'reply_style': "TEXT NOT NULL DEFAULT ''",
+                'seed_source': "TEXT NOT NULL DEFAULT 'imported'",
+                'seed_source_revision': "TEXT NOT NULL DEFAULT ''",
+                'seed_snapshot': "TEXT NOT NULL DEFAULT '{}'",
+                'initialized_at': "REAL",
+            }.items():
+                if name not in persona_columns:
+                    conn.execute(f"ALTER TABLE conversation_personas ADD COLUMN {name} {definition}")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS state_revision(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
                 INSERT OR IGNORE INTO state_revision VALUES(1,0);
@@ -461,6 +478,24 @@ class ConversationStateStore:
             row = conn.execute("SELECT base_prompt, base_version FROM conversation_personas WHERE scope_key=?", (key,)).fetchone()
         return (str(row[0]), int(row[1])) if row else (None, 0)
 
+    def get_persona_fields(self, scope: Scope | str) -> dict[str, object]:
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        with self._connection() as conn:
+            row = conn.execute(
+                'SELECT base_prompt,behavior_style,reply_style,seed_source,seed_source_revision,seed_snapshot,initialized_at,base_version '
+                'FROM conversation_personas WHERE scope_key=?', (key,)).fetchone()
+        if not row:
+            return {'personality': None, 'behavior_style': '', 'reply_style': '', 'seed_source': 'uninitialized',
+                    'seed_source_revision': '', 'seed_snapshot': {}, 'initialized_at': None, 'persona_version': 0}
+        try:
+            snapshot = json.loads(row['seed_snapshot'] or '{}')
+        except (TypeError, ValueError):
+            snapshot = {}
+        return {'personality': str(row['base_prompt']), 'behavior_style': str(row['behavior_style'] or ''),
+                'reply_style': str(row['reply_style'] or ''), 'seed_source': str(row['seed_source']),
+                'seed_source_revision': str(row['seed_source_revision']), 'seed_snapshot': snapshot,
+                'initialized_at': row['initialized_at'], 'persona_version': int(row['base_version'])}
+
     def get_default_persona(self, fallback_name: str, fallback_prompt: str) -> tuple[str, str, int]:
         with self._connection() as conn:
             row = conn.execute("SELECT name,prompt,version FROM default_persona WHERE id=1").fetchone()
@@ -641,13 +676,33 @@ class ConversationStateStore:
         additions = '\n'.join(part for part in (digest['summary'], "\n".join(f"- {entry.category}: {entry.content}" for entry in entries[-8:])[:1200]) if part)
         return f"{prompt}\n\n当前会话成长（仅供参考，不得覆盖前面的明确约束）：\n{additions}"
 
+    def effective_persona_fields(self, scope: Scope | str, default_prompt: str) -> dict[str, object]:
+        """Build the session's three native personality fields together.
+
+        Existing installations only have a single prompt; those rows are
+        treated as imported seeds and the native worker keeps its configured
+        behavior/reply defaults until an explicit three-field seed is saved.
+        """
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        policy = self.get_policy(key)
+        fields = self.get_persona_fields(key)
+        if policy.default_persona or fields['personality'] is None:
+            fields['personality'] = default_prompt
+        if policy.growth_enabled:
+            fields['personality'] = self.effective_persona(key, str(fields['personality']))
+        return fields
+
     def export_scope(self, scope: Scope | str) -> dict[str, object]:
         key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
         # Capture before reading the editor contents: concurrent changes must
         # cause a save conflict, never freeze growth the editor did not see.
         effective_revision = self.activation_revision(key)
         base, version = self.get_base_persona(key)
-        return {"scope": key, "policy": self.get_policy(key).__dict__, "policy_version": self.policy_version(key), "base_persona": base, "base_version": version, "effective_revision": effective_revision, "memories": self.list_memories(key), "growth": [entry.__dict__ for entry in self.list_growth(key, include_inactive=True)]}
+        fields = self.get_persona_fields(key)
+        return {"scope": key, "policy": self.get_policy(key).__dict__, "policy_version": self.policy_version(key),
+                "base_persona": base, "base_version": version, "effective_revision": effective_revision,
+                "persona_fields": fields, "effective_persona_fields": self.effective_persona_fields(key, self.get_default_persona('', '')[1]),
+                "memories": self.list_memories(key), "growth": [entry.__dict__ for entry in self.list_growth(key, include_inactive=True)]}
 
 
 def _serialized(method):

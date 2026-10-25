@@ -45,10 +45,16 @@ async def run():
     timing.no_action_backoff_cap_seconds = float(os.environ.get('JM_BOT_NO_ACTION_BACKOFF_CAP', '90'))
     timing.max_consecutive_wait_count = int(os.environ.get('JM_BOT_MAX_CONSECUTIVE_WAIT', '2'))
     config.maim_message.enabled = False
-    config.webui.enabled = False
+    # The migration plan requires the normal MaiBot management surface to be
+    # available.  Keep it loopback-only; the desktop connector forwards it
+    # over SSH alongside the JMbot console.
+    config.webui.enabled = True
+    config.webui.host = ['127.0.0.1']
+    config.webui.port = int(os.environ.get('JM_BOT_NATIVE_WEBUI_PORT', '8001'))
+    config.webui.mode = os.environ.get('JM_BOT_NATIVE_WEBUI_MODE', 'production')
     config.debug.enable_console_input = False
     config.telemetry.enable = False
-    config.plugin_runtime.enabled = False
+    config.plugin_runtime.enabled = True
     config.a_memorix.global_memory_sharing_enabled = False
     config.experimental.focus_mode = False
     config.expression.use_vector_expression = False
@@ -90,9 +96,9 @@ async def run():
     from src.config.config import write_config_to_file, BOT_CONFIG_PATH, MODEL_CONFIG_PATH, CONFIG_VERSION, MODEL_CONFIG_VERSION
     write_config_to_file(config, BOT_CONFIG_PATH, CONFIG_VERSION)
     write_config_to_file(config_manager.model_config, MODEL_CONFIG_PATH, MODEL_CONFIG_VERSION, True)
-    async def no_watcher():
-        return None
-    config_manager.start_file_watcher = no_watcher
+    # Keep MaiBot's normal configuration/plugin watcher.  The previous
+    # wrapper replaced this with a no-op, which made the native WebUI appear
+    # to work while every saved setting was silently ignored.
     from src.platform_io import (get_platform_io_manager, DriverDescriptor, DriverKind, RouteKey,
                                  RouteBinding, DeliveryReceipt, DeliveryStatus)
     from src.platform_io.drivers.base import PlatformIODriver
@@ -122,6 +128,10 @@ async def run():
     sessions.refresh = refresh_scope
     async def authorized():
         result = await client.get(context['gateway'] + '/native/status', headers=headers)
+        result.raise_for_status()
+    async def runtime_authorized():
+        result = await client.get(context['gateway'] + '/native/runtime-status',
+                                  headers={'Authorization': 'Bearer ' + context['runtime_token']})
         result.raise_for_status()
 
     # Native memory writes run in background threads as well as the main loop.
@@ -312,9 +322,15 @@ async def run():
                 scope = incoming_context['scope']
                 sessions.update(incoming_context)
                 scope_token = current_scope.set(scope)
-                await authorized()
                 Path('idle').unlink(missing_ok=True)
                 route = classify(event)
+                # Bootstrap/lifecycle frames are used only to bring up the
+                # normal MaiBot runtime and WebUI before the first chat. They
+                # have no scope grant and must never enter the chat pipeline.
+                if route.domain == 'chat':
+                    await authorized()
+                else:
+                    await runtime_authorized()
                 if route.domain != 'chat' or route.scope != scope or str(event['self_id']) != context['account']:
                     continue
                 kind, owner = scope.split(':')

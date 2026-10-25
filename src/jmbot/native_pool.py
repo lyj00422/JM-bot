@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,52 @@ class NativePool:
 
     def directory(self, identity):
         return self.root / self.runtime_identity(identity).replace(':', '_')
+
+    def _prepare_plugins(self, directory: Path) -> None:
+        """Copy repository plugins into the isolated MaiBot instance."""
+        source = Path(__file__).resolve().parents[2] / 'plugins'
+        if not source.is_dir():
+            return
+        target = directory / 'plugins'
+        target.mkdir(parents=True, exist_ok=True)
+        for plugin in source.iterdir():
+            if not plugin.is_dir() or plugin.name.startswith('.'):
+                continue
+            destination = target / plugin.name
+            config = destination / 'config.toml'
+            saved = config.read_bytes() if config.is_file() else None
+            shutil.copytree(plugin, destination, dirs_exist_ok=True)
+            if saved is not None:
+                config.write_bytes(saved)
+        adapter = target / 'maibot-team.snowluma-adapter'
+        config = adapter / 'config.toml'
+        if adapter.is_dir() and not config.exists():
+            enabled = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_ENABLED', '').lower() in {'1', 'true', 'yes', 'on'}
+            server = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_SERVER', '127.0.0.1')
+            port = int(os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_PORT', '8090'))
+            token = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_TOKEN', '')
+            config.write_text(
+                '[plugin]\n'
+                f'enabled = {str(enabled).lower()}\n'
+                'config_version = "1.1.8"\n\n'
+                '[client]\n'
+                'client_type = "napcat"\n'
+                f'server = "{server}"\n'
+                f'port = {port}\n'
+                f'token = "{token}"\n', encoding='utf-8')
+
+    async def ensure_runtime(self, identity, context):
+        """Start the normal runtime so WebUI is available before chat."""
+        runtime = self.runtime_identity(identity)
+        async with self.lock:
+            entry = self.processes.get(runtime)
+            if entry and entry['process'].returncode is None:
+                return entry
+        # Starting the worker itself initializes MainSystem and WebUI.  Do not
+        # enqueue a synthetic message: that would create a fake scope grant
+        # and make the bootstrap observable as a chat session.
+        await self.deliver(identity, None, context)
+        return self.processes.get(runtime)
 
     async def deliver(self, identity, event, context):
         scope_identity = identity
@@ -58,6 +105,7 @@ class NativePool:
                 if not directory.exists() and any(path.is_dir() for kind in ('group', 'private') for path in self.root.glob(legacy_prefix + '_' + kind + '_*')):
                     raise RuntimeError('legacy native data requires offline scope migration before starting')
                 directory.mkdir(parents=True, exist_ok=True)
+                self._prepare_plugins(directory)
                 if os.environ.get('JM_BOT_MAIBOT_TERMS_ACCEPTED') != MAIBOT_COMMIT:
                     raise RuntimeError('operator must review upstream EULA/privacy and acknowledge the locked commit')
                 (directory / 'ready').unlink(missing_ok=True)
@@ -91,6 +139,8 @@ class NativePool:
                 self.processes[identity] = entry
                 # The bounded stdin pipe queues startup input. Readiness is
                 # supervised independently so a cold scope cannot hold all peers.
+            if event is None:
+                return
             process = entry['process']
             frame = json.dumps({'event': event, 'context': context}, ensure_ascii=False).encode() + b'\n'
             if len(frame) > 1024 * 1024:

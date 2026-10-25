@@ -3,5 +3,5 @@
   "napcat": {"repository": "https://github.com/NapNeko/NapCatQQ", "reference_commit": "3420f0b76d7dc0ac92cde1663f21ea27f61e13bb"},
   "nonebot": {"package": "nonebot2", "version": "2.5.0", "research_commit": "6e1efbea0e0341b461c5ace5ecc794e302b3eac6"},
   "onebot": {"package": "nonebot-adapter-onebot", "version": "2.4.6"},
-  "adapter": {"implementation": "src/jmbot/split_adapter.py + src/jmbot/native_worker.py", "revision": "same Git revision as deployed JMbot", "official_connector_used": false}
+  "adapter": {"implementation": "plugins/maibot-team.snowluma-adapter + src/jmbot/native_worker.py", "revision": "MaiBot-SnowLuma-Adapter@54fcc7fcc4072983a1283d99fa0edd559125e1d7", "version": "1.1.8", "official_connector_available": true, "official_connector_used": false, "production_transport": "legacy_split_until_napcat_forward_ws_validation"}
 }

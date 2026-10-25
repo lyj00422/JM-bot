@@ -33,6 +33,10 @@ class NativeSessions:
         scope = context['scope']
         config = copy.deepcopy(self.base_config)
         config.personality.personality = context['persona']
+        if context.get('behavior_style'):
+            config.personality.behavior_style = context['behavior_style']
+        if context.get('reply_style'):
+            config.personality.reply_style = context['reply_style']
         # The upstream default Focus scope may merge all chats into one planner.
         # Independent native session loops are required for group isolation.
         config.experimental.focus_mode = False

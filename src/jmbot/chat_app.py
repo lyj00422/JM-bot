@@ -80,18 +80,14 @@ def create_chat_app():
     store_lock = threading.RLock()
 
     def resolve(scope):
-        kind, owner = scope.split(':')
-        default = credentials.get_default_provider(os.environ.get('JM_BOT_CHAT_DEFAULT_PROVIDER', 'ds_school'))
-        # The durable policy is authoritative once explicitly configured. A
-        # delayed management RPC must never re-enable default-key fallback.
-        if state.has_policy(scope):
-            if state.get_policy(scope).use_default_key:
-                return credentials.get_default_credential(default) or os.environ.get('JM_BOT_CHAT_DEFAULT_API_KEY', ''), default
-            provider = credentials.get_private_active_provider(int(owner)) if kind == 'private' else credentials.get_group_active_provider(int(owner))
-            method = credentials.get_private_credential if kind == 'private' else credentials.get_group_credential
-            return method(int(owner), provider), provider
-        method = credentials.effective_private_credential if kind == 'private' else credentials.effective_group_credential
-        return method(int(owner), os.environ.get('JM_BOT_CHAT_DEFAULT_API_KEY', ''), default)
+        # Chat generation is intentionally service-scoped.  Per-group/private
+        # API keys were a legacy escape hatch and are no longer selected by
+        # the runtime, even if old encrypted rows still exist for audit and
+        # rollback.  All generation tasks use the configured school gateway.
+        provider = os.environ.get('JM_BOT_CHAT_DEFAULT_PROVIDER', 'ds_school').strip().lower()
+        if not provider.endswith('_school'):
+            provider = 'ds_school'
+        return credentials.get_default_credential(provider) or os.environ.get('JM_BOT_CHAT_DEFAULT_API_KEY', ''), provider
 
     def routes(provider):
         # Explicit task capabilities; never infer vision/embedding from model names.
@@ -164,6 +160,7 @@ def create_chat_app():
                 await asyncio.to_thread(state.record_source, route.scope, str(event.get('message_id', '')), str(event['user_id']), text_of(event), event.get('time', time.time()))
                 revision = state.authorization_revision(route.scope)
                 policy = state.get_policy(route.scope)
+                persona_fields = state.effective_persona_fields(route.scope, state.get_default_persona('', '')[1])
                 credential_digest = hashlib.sha256(key.encode()).hexdigest()
                 grant_key = identity + ':' + str(revision) + ':' + provider + ':' + credential_digest
                 grant = grants.get(grant_key)
@@ -175,6 +172,12 @@ def create_chat_app():
                            'token': grant['token'], 'revision': revision,
                            'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
                            'persona': state.effective_persona(route.scope, state.get_default_persona('', '')[1]),
+                           'behavior_style': persona_fields.get('behavior_style', ''),
+                           'reply_style': persona_fields.get('reply_style', ''),
+                           'seed_source': persona_fields.get('seed_source', 'imported'),
+                           'seed_source_revision': persona_fields.get('seed_source_revision', ''),
+                           'seed_snapshot': persona_fields.get('seed_snapshot', {}),
+                           'persona_version': persona_fields.get('persona_version', 0),
                            'persona_revision': state.persona_revision(route.scope),
                            'growth_enabled': policy.growth_enabled, 'tasks': config['tasks'],
                            'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
@@ -211,6 +214,35 @@ def create_chat_app():
                 pass
             await asyncio.sleep(2)
 
+    async def bootstrap_native_runtime():
+        """Start the normal MaiBot process so its WebUI is immediately real."""
+        if os.environ.get('JM_BOT_PREWARM_NATIVE', '').lower() not in {'1', 'true', 'yes', 'on'}:
+            return
+        account = os.environ.get('JM_BOT_QQ_ACCOUNT', '').strip()
+        provider = os.environ.get('JM_BOT_CHAT_DEFAULT_PROVIDER', 'ds_school').strip().lower()
+        if not account or not provider.endswith('_school'):
+            return
+        try:
+            config = routes(provider)
+        except Exception:
+            return
+        context = {
+            'scope': 'private:1', 'account': account,
+            'identity': 'qq:' + account + ':private:1',
+            'token': secrets.token_urlsafe(32), 'revision': 'bootstrap',
+            'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
+            'persona': state.get_default_persona('大肥鱼', '')[1],
+            'persona_revision': state.persona_revision('private:1'),
+            'growth_enabled': False, 'tasks': config['tasks'],
+            'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
+            'emoji_mode': os.environ.get('JM_BOT_EMOJI_MODE', 'selector'),
+            'write_barrier': str((data / 'policy-write.lock').resolve()),
+        }
+        try:
+            await pool.ensure_runtime(context['identity'], context)
+        except Exception as exc:
+            failures['bootstrap'] = {'type': type(exc).__name__, 'at': time.time()}
+
     @asynccontextmanager
     async def lifespan(app):
         loop = asyncio.get_running_loop()
@@ -227,7 +259,7 @@ def create_chat_app():
             'stickers': {'template_bytes', 'preview_bytes', 'confirm_preview', 'catalog', 'review'}, 'ingress': {'accept'}})
         await scheduler.start()
         await background_scheduler.start()
-        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run()), asyncio.create_task(growth.maintain())]
+        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run()), asyncio.create_task(growth.maintain()), asyncio.create_task(bootstrap_native_runtime())]
         try:
             yield
         finally:
@@ -273,6 +305,8 @@ def create_chat_app():
         grant, _ = grant_for(request)
         context = dict(pool.scopes[grant['identity']]['context'])
         context.update(persona=state.effective_persona(grant['scope'], state.get_default_persona('', '')[1]),
+                       **{key: value for key, value in state.effective_persona_fields(grant['scope'], state.get_default_persona('', '')[1]).items()
+                          if key in {'behavior_style', 'reply_style', 'seed_source', 'seed_source_revision', 'seed_snapshot', 'persona_version'}},
                        persona_revision=state.persona_revision(grant['scope']),
                        growth_enabled=state.get_policy(grant['scope']).growth_enabled,
                        tasks=routes(grant['provider'])['tasks'],
