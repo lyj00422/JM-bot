@@ -155,7 +155,7 @@ class ScopePolicyPlugin(MaiBotPlugin):
         mode=HookMode.BLOCKING,
         order=HookOrder.EARLY,
         timeout_ms=5000,
-        error_policy=ErrorPolicy.ABORT,
+        error_policy=ErrorPolicy.LOG,
     )
     async def planner_persona(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
         data = await self._scope(session_id=session_id)
@@ -168,7 +168,7 @@ class ScopePolicyPlugin(MaiBotPlugin):
         mode=HookMode.BLOCKING,
         order=HookOrder.EARLY,
         timeout_ms=5000,
-        error_policy=ErrorPolicy.ABORT,
+        error_policy=ErrorPolicy.LOG,
     )
     async def replyer_persona(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
         data = await self._scope(session_id=session_id)
