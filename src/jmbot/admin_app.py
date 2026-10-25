@@ -31,7 +31,7 @@ from jmbot.core.sticker_import import StickerImportError, StickerImporter
 
 
 SUPER_ADMIN_ID = 3065532050
-RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.19")
+RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.20")
 ALLOWED_PROVIDERS = {
     "ds_school", "ds_official", "glm_school", "glm_official",
     "kimi_school", "kimi_official", "qwen_school", "qwen_official",
@@ -667,12 +667,27 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             except httpx.HTTPError:
                 return False
         native_ok, napcat_ok = await asyncio.gather(probe(8001), probe(6099))
+        login = {'token': None, 'source': None}
+        if native_ok and native_client is not None:
+            try:
+                async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
+                    response = await client.get(
+                        native_client.url + '/internal/native/webui-login',
+                        headers={'Authorization': 'Bearer ' + native_client.token})
+                    response.raise_for_status()
+                    value = response.json()
+                    if isinstance(value, dict) and isinstance(value.get('token'), str):
+                        login = {'token': value['token'], 'source': value.get('source')}
+            except (httpx.HTTPError, ValueError):
+                pass
         official = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_ENABLED', '').lower() in {'1', 'true', 'yes', 'on'}
         return {
             'console': {'label': 'JMbot 联合控制台', 'url': base, 'available': True},
             'maibot': {'label': 'MaiBot 原生 WebUI', 'url': f'http://127.0.0.1:{native_port}', 'available': native_ok,
+                       'login_token': login['token'], 'token_source': login['source'],
                        'server_port': 8001, 'detail': '原生 runtime 尚未启动；收到授权消息后会自动启动' if not native_ok else '原生 WebUI 在线'},
             'napcat': {'label': 'NapCat 原生 WebUI', 'url': f'http://127.0.0.1:{napcat_port}', 'available': napcat_ok,
+                       'login_token': napcat_admin.token or None, 'token_source': 'configured',
                        'server_port': 6099, 'detail': '等待 SSH 转发或 NapCat WebUI' if not napcat_ok else 'NapCat WebUI 在线'},
             'chat_transport': 'official_snowluma' if official else 'legacy_native_worker',
             'official_connector_enabled': official,

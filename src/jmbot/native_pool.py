@@ -29,6 +29,28 @@ class NativePool:
     def directory(self, identity):
         return self.root / self.runtime_identity(identity).replace(':', '_')
 
+    def webui_login(self):
+        """Read only the active WebUI login token, never the worker lease."""
+        for identity, entry in self.processes.items():
+            if entry['process'].returncode is not None:
+                continue
+            path = self.directory(identity) / 'data' / 'webui.json'
+            try:
+                config = json.loads(path.read_text(encoding='utf-8'))
+                if not isinstance(config, dict):
+                    continue
+                token = config.get('access_token')
+                source = config.get('token_source', 'temporary')
+                # Temporary tokens rotate during WebUI startup. Do not offer
+                # the previous process's token while the new one is starting.
+                if source != 'configured' and path.stat().st_mtime < entry['started']:
+                    continue
+                if isinstance(token, str) and token.strip():
+                    return {'token': token, 'source': source}
+            except (OSError, ValueError):
+                continue
+        return {'token': None, 'source': None}
+
     def _prepare_plugins(self, directory: Path) -> None:
         """Copy repository plugins into the isolated MaiBot instance."""
         source = Path(__file__).resolve().parents[2] / 'plugins'

@@ -288,6 +288,15 @@ def create_chat_app():
             raise HTTPException(403, 'credential unavailable')
         return grant, key
 
+    @app.get('/internal/native/webui-login')
+    async def webui_login(request: Request):
+        bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
+        if not secrets.compare_digest(bearer, token):
+            raise HTTPException(401, 'invalid service authentication')
+        # This secret must not pass through the persisted RPC result ledger.
+        return Response(json.dumps(pool.webui_login()), media_type='application/json',
+                        headers={'Cache-Control': 'no-store'})
+
     @app.get('/native/status')
     async def native_status(request: Request):
         grant_for(request)

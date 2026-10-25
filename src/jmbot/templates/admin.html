@@ -46,6 +46,9 @@
     #login h1 { margin-bottom: 20px; }
     #login form { display: grid; gap: 14px; }
     #notice { position: fixed; right: 18px; bottom: 18px; max-width: min(420px, calc(100vw - 36px)); padding: 10px 14px; color: #fff; background: #263d3d; border-radius: 4px; display: none; }
+    .token-actions { margin: 10px 0 6px; }
+    .native-entry input { font-family: Consolas, monospace; }
+    button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid #176b61; outline-offset: 2px; }
     pre { overflow: auto; padding: 12px; background: #edf0f0; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
     @media (max-width: 720px) {
       .shell { grid-template-columns: 1fr; }
@@ -74,14 +77,15 @@
     <div class="shell">
       <nav id="nav">
         <button data-page="monitor" class="active">状态</button>
-        <div class="nav-group"><span>监控</span>
+        <button data-page="native">原生管理入口</button>
+        <div class="nav-group"><span>QQ 会话</span>
           <button data-page="groups">群聊</button>
           <button data-page="friends">私聊</button>
           <button data-page="approvals">申请</button>
         </div>
         <div class="nav-group"><span>聊天</span>
           <button data-page="persona">人设与成长</button>
-          <button data-page="stickers">表情包库</button>
+          <button data-page="stickers">表情包导入</button>
         </div>
         <div class="nav-group"><span>下载</span>
           <button data-page="download-perms">会话权限</button>
@@ -91,15 +95,16 @@
         <button id="admin-nav" data-page="admins" hidden>管理员账号</button>
       </nav>
       <main>
-        <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>原生管理入口</h2><div id="management-links" class="grid"><p class="muted">正在检查 SSH 转发和原生服务…</p></div><p class="muted">MaiBot 和 NapCat 使用各自的原生后台；本页只负责聚合状态与会话策略。</p></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state" class="muted">读取 NapCat 登录状态；掉线时点「获取二维码」扫码登录。</div></div><button id="refresh-status">刷新</button></section>
-        <section class="section" id="page-groups"><h1>群聊监控</h1><div class="panel"><div class="row"><label>搜索<input id="monitor-group-search" placeholder="群号 / 群名 / 备注"></label><button id="refresh-groups">刷新</button></div><div id="monitor-group-list" class="muted">加载中…</div></div></section>
-        <section class="section" id="page-friends"><h1>私聊监控</h1><div class="panel"><div class="row"><label>搜索<input id="monitor-friend-search" placeholder="QQ / 昵称 / 备注"></label><button id="refresh-friends">刷新</button></div><div id="monitor-friend-list" class="muted">加载中…</div></div></section>
+        <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><p><button id="refresh-status">刷新状态</button></p></section>
+        <section class="section" id="page-native"><h1>原生管理入口</h1><p class="muted">复制对应的登录 Token，再打开 MaiBot 或 NapCat 原生后台登录。会话权限、人设与成长、表情包导入和下载任务继续在本后台管理。</p><div id="management-links"><p class="muted">正在读取原生服务与登录 Token…</p></div><p><button id="refresh-management">刷新入口与 Token</button></p><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state"></div></div></section>
+        <section class="section" id="page-groups"><h1>群聊</h1><p class="muted">查看已加入的群并管理群备注。聊天权限和人设在「人设与成长」中设置。</p><div class="panel"><div class="row"><label>搜索<input id="monitor-group-search" placeholder="群号 / 群名 / 备注"></label><button id="refresh-groups">刷新</button></div><div id="monitor-group-list" class="muted">加载中…</div></div></section>
+        <section class="section" id="page-friends"><h1>私聊</h1><p class="muted">查看好友并管理备注。聊天权限和人设在「人设与成长」中设置。</p><div class="panel"><div class="row"><label>搜索<input id="monitor-friend-search" placeholder="QQ / 昵称 / 备注"></label><button id="refresh-friends">刷新</button></div><div id="monitor-friend-list" class="muted">加载中…</div></div></section>
         <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
         <section class="section" id="page-persona"><h1>人设与成长</h1><div class="panel"><h2>默认人设</h2><label>名称<input id="default-name"></label><label>人设内容<textarea id="default-prompt"></textarea></label><button id="save-default-persona" class="primary">保存默认人设</button></div><div class="panel"><h2>会话开关</h2><p class="muted">按群聊/私聊控制「使用默认人设」和「角色成长」；有独立基础人设时，两项都可关闭；重新开启成长会保留现有人设。</p><div class="row"><label>分类<select id="persona-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="persona-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="persona-scope-list" class="muted">加载中…</div><p><button id="refresh-persona-scopes">刷新会话列表</button></p></div><div class="panel"><h2>会话人设</h2><div class="grid"><label>类型<select id="scope-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="scope-owner" inputmode="numeric"></label></div><p><button id="load-scope">读取会话</button></p><div id="scope-state"></div></div></section>
         <section class="section" id="page-download-perms"><h1>下载会话权限</h1><div class="panel"><div class="grid"><label>类型<select id="download-kind"><option value="group">群聊</option><option value="private">私聊</option></select></label><label>群号或好友 QQ<input id="download-owner" inputmode="numeric"></label></div><p><button id="add-download-scope" class="primary">添加会话</button></p><div class="row"><label>分类<select id="download-kind-filter"><option value="">全部</option><option value="group">群聊</option><option value="private">私聊</option></select></label><label>搜索<input id="download-search" placeholder="群号或 QQ" inputmode="numeric"></label></div><div id="download-status"></div></div></section>
         <section class="section" id="page-download-queue"><h1>下载队列</h1><div class="panel"><div class="row"><button id="refresh-queue">刷新队列</button><button id="clear-queue" class="danger">清空待处理</button><button id="clear-finished" class="danger">清空已完成</button><label class="check"><input id="show-finished" type="checkbox">显示已完成</label></div><div id="queue-actions" class="muted"></div><div id="download-queue"></div></div></section>
         <section class="section" id="page-download-help"><h1>下载帮助文本</h1><div class="panel"><label>帮助文本<textarea id="help-text"></textarea></label><button id="save-help" class="primary">保存帮助文本</button></div></section>
-        <section class="section" id="page-stickers"><h1>表情包库</h1><p><a href="/api/stickers/template">下载导入模板 ZIP</a></p><div class="panel"><label>表情包 ZIP<input id="sticker-file" type="file" accept=".zip,application/zip"></label><p><button id="upload-stickers" class="primary">上传并追加到库</button></p></div><div id="sticker-result"></div></section>
+        <section class="section" id="page-stickers"><h1>表情包导入</h1><p class="muted">向 JMbot 会话表情库批量导入 ZIP；先预览，再确认。原生运行状态与配置请从「原生管理入口」查看。</p><p><a href="/api/stickers/template">下载导入模板 ZIP</a></p><div class="panel"><label>表情包 ZIP<input id="sticker-file" type="file" accept=".zip,application/zip"></label><p><button id="upload-stickers" class="primary">上传并预览</button></p></div><div id="sticker-result"></div></section>
         <section class="section" id="page-admins"><h1>管理员账号</h1><div id="admin-list"></div><div class="grid panel"><label>管理员 QQ<input id="new-admin-qq" inputmode="numeric"></label><label>设置后台密码<input id="new-admin-password" type="password" autocomplete="new-password"></label></div><p><button id="add-admin" class="primary">添加管理员</button></p></section>
       </main>
     </div>
@@ -117,7 +122,7 @@
       return data;
     }
     function note(text) { $("notice").textContent = text; $("notice").style.display = "block"; setTimeout(() => $("notice").style.display = "none", 2600); }
-    function showLogin() { $("login").hidden = false; $("app").hidden = true; }
+    function showLogin() { $("login").hidden = false; $("app").hidden = true; $("management-links").replaceChildren(); }
     async function enterApp() { me = await api("/api/me"); $("identity").textContent = `QQ ${me.qq_id}`; $("admin-nav").hidden = !me.is_super; $("login").hidden = true; $("app").hidden = false; await Promise.all([loadStatus(), loadManagementLinks(), loadApprovals("pending"), loadHelp(), loadDefaultPersona(), loadGlobalPolicy(), loadQr()]); }
     $("login-form").addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await api("/api/login", { method: "POST", body: JSON.stringify({ qq_id: Number(form.get("qq_id")), password: form.get("password") }) }); await enterApp(); } catch (error) { note(error.message); } });
     $("logout").onclick = async () => { await api("/api/logout", { method: "POST" }); showLogin(); };
@@ -128,7 +133,7 @@
       document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item === button));
       document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${page}`));
       if (page === "admins") loadAdmins();
-      if (page === "credentials") loadCredentials();
+      if (page === "native") { loadManagementLinks(); loadQr(); }
       if (page === "persona") loadPersonaScopes();
       if (page === "download-perms") loadDownloadStatus();
       if (page === "download-queue") loadDownloadQueue();
@@ -138,7 +143,46 @@
       if (page === "friends") loadMonitor("private");
     });
     async function loadStatus() { try { const data = await api("/api/status"); $("services").innerHTML = Object.entries(data.services).map(([name, value]) => `<div class="item"><div>${escapeHtml(name)}<small>${escapeHtml(value.detail || "")}</small></div><span class="status ${value.healthy ? "ok" : "bad"}">${value.healthy ? "在线" : "离线"}</span></div>`).join("") || "<p class='muted'>暂无服务心跳</p>"; } catch (error) { note(error.message); } }
-    async function loadManagementLinks() { try { const data = await api('/api/management/links'); const rows = [data.maibot, data.napcat].map(item => `<div class="item"><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail || '')}</small></div><span><span class="status ${item.available ? 'ok' : 'bad'}">${item.available ? '在线' : '未连接'}</span> <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">打开</a></span></div>`).join(''); $('management-links').innerHTML = rows + `<div class="item"><div><strong>聊天传输</strong><small>计划目标：官方 SnowLuma/NapCat connector</small></div><span class="status ${data.official_connector_enabled ? 'ok' : 'bad'}">${data.official_connector_enabled ? '官方 connector' : '旧 worker 回退链'}</span></div>`; } catch (error) { note(error.message); } }
+    async function copyLoginToken(input) {
+      if (navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(input.value); return; } catch (_) {}
+      }
+      const previousType = input.type;
+      input.type = 'text'; input.focus(); input.select();
+      try { if (!document.execCommand('copy')) throw new Error('请选中 Token 后手动复制'); }
+      finally { input.type = previousType; input.setSelectionRange(0, 0); }
+    }
+    async function loadManagementLinks() {
+      try {
+        const data = await api('/api/management/links');
+        const box = $('management-links'); box.replaceChildren();
+        for (const item of [data.maibot, data.napcat]) {
+          const card = document.createElement('div'); card.className = 'panel native-entry';
+          const heading = document.createElement('div'); heading.className = 'item';
+          const title = document.createElement('strong'); title.textContent = item.label;
+          const actions = document.createElement('div'); actions.className = 'row';
+          const status = document.createElement('span'); status.className = 'status ' + (item.available ? 'ok' : 'bad'); status.textContent = item.available ? '在线' : '未连接';
+          const link = document.createElement('a'); link.href = item.url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = '打开后台';
+          actions.append(status, link); heading.append(title, actions); card.append(heading);
+          const detail = document.createElement('p'); detail.className = 'muted'; detail.textContent = item.detail || ''; card.append(detail);
+          if (item.login_token) {
+            const label = document.createElement('label'); label.textContent = '登录 Token';
+            const input = document.createElement('input'); input.type = 'password'; input.readOnly = true; input.autocomplete = 'off'; input.spellcheck = false; input.value = item.login_token; label.append(input);
+            const buttons = document.createElement('div'); buttons.className = 'row token-actions';
+            const reveal = document.createElement('button'); reveal.textContent = '显示'; reveal.setAttribute('aria-pressed', 'false');
+            reveal.onclick = () => { const visible = input.type === 'password'; input.type = visible ? 'text' : 'password'; reveal.textContent = visible ? '隐藏' : '显示'; reveal.setAttribute('aria-pressed', String(visible)); };
+            const copy = document.createElement('button'); copy.className = 'primary'; copy.textContent = '复制 Token';
+            copy.onclick = async () => { try { await copyLoginToken(input); note(item.label + ' 登录 Token 已复制'); } catch (error) { input.type = 'text'; reveal.textContent = '隐藏'; reveal.setAttribute('aria-pressed', 'true'); input.focus(); input.select(); note(error.message); } };
+            buttons.append(copy, reveal); card.append(label, buttons);
+            const hint = document.createElement('small'); hint.className = 'muted'; hint.textContent = item.token_source === 'temporary' ? '本次启动的临时 Token；服务重启后请刷新此处再复制。' : '当前配置的登录 Token。'; card.append(hint);
+          } else {
+            const hint = document.createElement('p'); hint.className = 'muted'; hint.textContent = item.available ? '暂未读取到登录 Token，请稍后刷新。' : '服务未启动，暂无可用登录 Token。'; card.append(hint);
+          }
+          box.append(card);
+        }
+      } catch (error) { $('management-links').textContent = '读取入口失败：' + error.message; note(error.message); }
+    }
+    $('refresh-management').onclick = () => Promise.all([loadManagementLinks(), loadQr()]);
     $("refresh-status").onclick = loadStatus;
     setInterval(() => { if (!$("app").hidden) loadStatus(); }, 15000);
     async function loadGlobalPolicy() { const value = await api("/api/policies/global"); $("global-chat").checked = value.chat; $("global-download").checked = value.download; }
@@ -151,7 +195,7 @@
       const kind = $("scope-kind").value, owner = $("scope-owner").value;
       try {
         const data = await api(`/api/scopes/${kind}/${owner}`);
-        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-chat-blacklist" type="checkbox" ${data.policy.chat_blacklisted ? "checked" : ""}>聊天黑名单</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><label>独立基础人设<textarea id="base-persona">${escapeHtml(data.base_persona || "")}</textarea></label><p><button id="save-base-persona">保存基础人设</button></p><h2>最终生效人设</h2><pre>${escapeHtml(data.effective_persona || "")}</pre><h2>长期记忆</h2><pre>${escapeHtml(JSON.stringify(data.memories, null, 2))}</pre><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：当前 learner 从最近消息中提炼成长，通过验证后自动生效。冻结条目不再叠加；解冻已固化进基础人设的条目会再次叠加。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
+        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-chat-blacklist" type="checkbox" ${data.policy.chat_blacklisted ? "checked" : ""}>聊天黑名单</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：当前 learner 从最近消息中提炼成长，通过验证后自动生效。冻结条目不再叠加；解冻已固化进基础人设的条目会再次叠加。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
         const list = $("growth-entries");
         data.growth.forEach((entry) => {
           const row = document.createElement("div"); row.className = "item";
@@ -166,14 +210,10 @@
         });
         if (!data.growth.length) list.textContent = "还没有成长条目（会话积累消息后会自动生成）";
         $("save-scope-policy").onclick = async () => { const body = Object.fromEntries([["chat_enabled", "scope-chat"], ["download_enabled", "scope-download"], ["chat_blacklisted", "scope-chat-blacklist"], ["download_blacklisted", "scope-download-blacklist"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked])); try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("会话开关已保存"); } catch (error) { note(error.message); } };
-        $("save-base-persona").onclick = async () => { try { await api(`/api/scopes/${kind}/${owner}/persona`, { method: "PUT", body: JSON.stringify({ prompt: $("base-persona").value, expected_version: data.base_version }) }); note("基础人设已保存"); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
         $("add-growth").onclick = async () => { try { await api(`/api/scopes/${kind}/${owner}/growth`, { method: "POST", body: JSON.stringify({ category: $("growth-category").value, content: $("growth-content").value, evidence: $("growth-evidence").value }) }); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
         $("rollback-growth").onclick = async () => { const version = prompt("回退到哪个版本？该版本之后的成长会停用，历史仍保留。"); if (version === null) return; try { const result = await api(`/api/scopes/${kind}/${owner}/growth/rollback/${Number(version)}`, { method: "POST" }); note(`已停用 ${result.deactivated} 条成长`); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
       } catch (error) { note(error.message); }
     };
-    async function loadCredentials() { try { const data = await api("/api/credentials"); $("credential-list").innerHTML = `<div class="item"><div>默认 Key<small>${escapeHtml(data.default_provider)} · ${data.default_configured ? "已配置" : "未配置"}</small></div><span class="status ${data.default_configured ? "ok" : "bad"}">${data.default_configured ? "已配置" : "未配置"}</span></div>` + data.scopes.map((row) => `<div class="item"><div>${escapeHtml(row.scope)}<small>${escapeHtml(row.provider)} · ${row.uses_default ? "使用默认 Key" : "使用独立 Key"}</small></div><span class="status ${row.configured ? "ok" : "bad"}">${row.configured ? "已配置" : "缺少 Key"}</span></div>`).join(""); } catch (error) { note(error.message); } }
-    if ($("save-key")) $("save-key").onclick = async () => { const kind = $("key-kind").value, owner = $("key-owner").value, url = `/api/credentials/${kind}/${owner}/${$("key-provider").value}`, apiKey = $("key-value").value; try { await api(url, { method: "PUT", body: JSON.stringify({ api_key: apiKey }) }); $("key-value").value = ""; note("Key 已加密保存"); await loadCredentials(); } catch (error) { if (error.message.includes("确认覆盖") && confirm("该会话已配置独立 Key，覆盖当前会话 Key？")) { try { await api(url, { method: "PUT", body: JSON.stringify({ api_key: apiKey, overwrite: true }) }); $("key-value").value = ""; note("独立 Key 已覆盖"); await loadCredentials(); } catch (retryError) { note(retryError.message); } } else { note(error.message); } } };
-    if ($("save-default-key")) $("save-default-key").onclick = async () => { try { await api(`/api/credentials/default/${$("default-provider").value}`, { method: "PUT", body: JSON.stringify({ api_key: $("default-key-value").value }) }); $("default-key-value").value = ""; note("默认 Key 已加密保存"); await loadCredentials(); } catch (error) { note(error.message); } };
     async function loadHelp() { try { $("help-text").value = (await api("/api/help/jm")).content; } catch (error) { note(error.message); } }
     $("save-help").onclick = async () => { try { await api("/api/help/jm", { method: "PUT", body: JSON.stringify({ content: $("help-text").value }) }); note("帮助文本已保存"); } catch (error) { note(error.message); } };
     async function loadDownloadStatus() {
@@ -392,12 +432,11 @@
           growthInput.checked = Boolean(policy.growth_enabled);
           growthInput.onchange = () => switchPersonaMode(entry.kind, entry.owner, "growth", growthInput);
           growthBox.append(growthInput, document.createTextNode("开启角色成长"));
-          const edit = document.createElement("button"); edit.textContent = "编辑人设";
-          const editor = document.createElement("div"); editor.hidden = true;
-          edit.onclick = () => openPersonaEditor(entry.kind, entry.owner, editor);
+          const edit = document.createElement("button"); edit.textContent = "编辑会话";
+          edit.onclick = async () => { $('scope-kind').value = entry.kind; $('scope-owner').value = entry.owner; await $('load-scope').onclick(); $('scope-state').scrollIntoView({ block: 'start' }); };
           controls.append(chatBox, defaultBox, growthBox, edit);
           row.append(name, controls);
-          box.append(row, editor);
+          box.append(row);
         });
       } catch (error) { note(error.message); }
     }
@@ -490,45 +529,6 @@
         await loadPersonaScopes();
       } catch (error) { note(error.message); await loadPersonaScopes(); }
     }
-    async function openPersonaEditor(kind, owner, editor) {
-      if (editor.dataset.refining === '1') return;
-      editor.dataset.refining = '1';
-      editor.hidden = false;
-      editor.textContent = '正在调用模型提炼人设，请稍候…当前人设仍然生效。';
-      try {
-        const draft = await api(`/api/scopes/${kind}/${owner}/persona/refine`, { method: 'POST', body: '{}' });
-        editor.textContent = '';
-        if (!editor.firstChild) {
-          const area = document.createElement("textarea"); area.rows = 14;
-          const actions = document.createElement("div"); actions.className = "row";
-          const save = document.createElement("button"); save.className = "primary"; save.textContent = "保存人设";
-          const cancel = document.createElement("button"); cancel.textContent = "取消";
-          const status = document.createElement("span"); status.className = "muted";
-          actions.append(save, cancel, status);
-          editor.append(area, actions);
-          cancel.onclick = () => { editor.hidden = true; };
-          save.onclick = async () => {
-            save.disabled = true;
-            try {
-              await api(`/api/scopes/${kind}/${owner}/persona/effective`, { method: "PUT", body: JSON.stringify({ prompt: area.value, expected_version: Number(area.dataset.version || 0), expected_revision: area.dataset.revision }) });
-              status.textContent = "已保存，立即生效";
-              await loadPersonaScopes();
-            } catch (error) { status.textContent = error.message; }
-            finally { save.disabled = false; }
-          };
-        }
-        const area = editor.querySelector("textarea");
-        const merged = draft.growth_count;
-        area.value = draft.persona;
-        area.dataset.version = String(draft.base_version);
-        area.dataset.revision = draft.effective_revision;
-        editor.querySelector("span").textContent = merged
-          ? `已提炼 ${merged} 条成长，可直接保存或修改；保存后以此继续成长。${(draft.notes || []).join('；')}`
-          : "已提炼人设，可直接保存或修改；保存后以此继续成长";
-        editor.hidden = false;
-      } catch (error) { editor.textContent = `提炼失败：${error.message}。原人设未改变，请重试。`; note(error.message); }
-      finally { editor.dataset.refining = '0'; }
-    }
     $("refresh-persona-scopes").onclick = () => { rosterCache = null; loadPersonaScopes(); };
     $("persona-kind-filter").onchange = loadPersonaScopes;
     $("persona-search").oninput = loadPersonaScopes;
@@ -556,10 +556,10 @@
         const nativePanel = document.createElement("div");
         nativePanel.className = "panel";
         nativePanel.id = "native-persona-fields";
-        nativePanel.innerHTML = `<h2>原生三字段人设</h2><p class="muted">每个群/私聊独立保存 personality、behavior_style、reply_style。首次保存可选择 A（现有成长模板）、B（原生 WebUI）或 imported；来源快照不会随普通编辑静默覆盖。</p><label>Personality / 性格<textarea id="persona-personality"></textarea></label><label>Behavior style / 行为风格<textarea id="persona-behavior"></textarea></label><label>Reply style / 回复风格<textarea id="persona-reply"></textarea></label><div class="grid"><label>起点来源<select id="persona-seed-source"><option value="a">A · 现有成长模板</option><option value="b">B · 原生 WebUI</option><option value="imported">Imported · 已有会话</option></select></label><label>来源版本 / revision<input id="persona-seed-revision" maxlength="200"></label></div><label class="check"><input id="persona-rebase" type="checkbox">显式重新应用起点并更新快照（会保留历史版本）</label><p><button id="save-persona-fields" class="primary">保存三字段人设</button></p><p id="persona-fields-meta" class="muted"></p><h3>当前生效三字段</h3><pre id="effective-persona-fields"></pre><h3>起点快照</h3><pre id="persona-seed-snapshot"></pre>`;
+        nativePanel.innerHTML = `<h2>原生三字段人设</h2><p class="muted">每个群/私聊独立保存 personality、behavior_style、reply_style。首次保存可选择 A（现有成长模板）、B（原生 WebUI）或 imported；来源快照不会随普通编辑静默覆盖。长期记忆由原生 MaiBot 管理，可从「原生管理入口」进入。</p><label>Personality / 性格<textarea id="persona-personality"></textarea></label><label>Behavior style / 行为风格<textarea id="persona-behavior"></textarea></label><label>Reply style / 回复风格<textarea id="persona-reply"></textarea></label><div class="grid"><label>起点来源<select id="persona-seed-source"><option value="a">A · 现有成长模板</option><option value="b">B · 原生 WebUI</option><option value="imported">Imported · 已有会话</option></select></label><label>来源版本 / revision<input id="persona-seed-revision" maxlength="200"></label></div><label class="check"><input id="persona-rebase" type="checkbox">显式重新应用起点并更新快照（会保留历史版本）</label><p><button id="save-persona-fields" class="primary">保存三字段人设</button></p><p id="persona-fields-meta" class="muted"></p><h3>当前生效三字段</h3><pre id="effective-persona-fields"></pre><h3>起点快照</h3><pre id="persona-seed-snapshot"></pre>`;
         const fieldsValue = (key) => String(fields[key] ?? "");
         $("scope-state").prepend(nativePanel);
-        $("persona-personality").value = fieldsValue("personality") || String(current.base_persona || "");
+        $("persona-personality").value = fieldsValue("personality") || String(effectiveFields.personality || current.base_persona || "");
         $("persona-behavior").value = fieldsValue("behavior_style");
         $("persona-reply").value = fieldsValue("reply_style");
         $("persona-seed-source").value = ["a", "b", "imported"].includes(fields.seed_source) ? fields.seed_source : "imported";
