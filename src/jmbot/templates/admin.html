@@ -551,6 +551,35 @@
       try {
         const current = await api(`/api/scopes/${kind}/${owner}`);
         for (const id of ["scope-download", "scope-download-blacklist"]) $(id).closest("label").hidden = true;
+        const fields = current.persona_fields || {};
+        const effectiveFields = current.effective_persona_fields || {};
+        const nativePanel = document.createElement("div");
+        nativePanel.className = "panel";
+        nativePanel.id = "native-persona-fields";
+        nativePanel.innerHTML = `<h2>原生三字段人设</h2><p class="muted">每个群/私聊独立保存 personality、behavior_style、reply_style。首次保存可选择 A（现有成长模板）、B（原生 WebUI）或 imported；来源快照不会随普通编辑静默覆盖。</p><label>Personality / 性格<textarea id="persona-personality"></textarea></label><label>Behavior style / 行为风格<textarea id="persona-behavior"></textarea></label><label>Reply style / 回复风格<textarea id="persona-reply"></textarea></label><div class="grid"><label>起点来源<select id="persona-seed-source"><option value="a">A · 现有成长模板</option><option value="b">B · 原生 WebUI</option><option value="imported">Imported · 已有会话</option></select></label><label>来源版本 / revision<input id="persona-seed-revision" maxlength="200"></label></div><label class="check"><input id="persona-rebase" type="checkbox">显式重新应用起点并更新快照（会保留历史版本）</label><p><button id="save-persona-fields" class="primary">保存三字段人设</button></p><p id="persona-fields-meta" class="muted"></p><h3>当前生效三字段</h3><pre id="effective-persona-fields"></pre><h3>起点快照</h3><pre id="persona-seed-snapshot"></pre>`;
+        const fieldsValue = (key) => String(fields[key] ?? "");
+        $("scope-state").prepend(nativePanel);
+        $("persona-personality").value = fieldsValue("personality") || String(current.base_persona || "");
+        $("persona-behavior").value = fieldsValue("behavior_style");
+        $("persona-reply").value = fieldsValue("reply_style");
+        $("persona-seed-source").value = ["a", "b", "imported"].includes(fields.seed_source) ? fields.seed_source : "imported";
+        $("persona-seed-revision").value = fieldsValue("seed_source_revision");
+        $("persona-fields-meta").textContent = `persona_version=${fields.persona_version ?? current.base_version ?? 0} · initialized_at=${fields.initialized_at ? new Date(Number(fields.initialized_at) * 1000).toLocaleString() : "未初始化"}`;
+        $("effective-persona-fields").textContent = JSON.stringify(effectiveFields, null, 2);
+        $("persona-seed-snapshot").textContent = JSON.stringify(fields.seed_snapshot || {}, null, 2);
+        $("save-persona-fields").onclick = async () => {
+          const payload = {
+            personality: $("persona-personality").value,
+            behavior_style: $("persona-behavior").value,
+            reply_style: $("persona-reply").value,
+            seed_source: $("persona-seed-source").value,
+            seed_source_revision: $("persona-seed-revision").value,
+            expected_version: Number(fields.persona_version ?? current.base_version ?? 0),
+            rebase: $("persona-rebase").checked,
+          };
+          if (payload.rebase) payload.seed_snapshot = { personality: payload.personality, behavior_style: payload.behavior_style, reply_style: payload.reply_style };
+          try { await api(`/api/scopes/${kind}/${owner}/persona/fields`, { method: "PUT", body: JSON.stringify(payload) }); note(payload.rebase ? "已保存三字段并建立新起点快照" : "三字段人设已保存"); await $("load-scope").onclick(); } catch (error) { note(error.message); }
+        };
         $("save-scope-policy").textContent = "保存聊天开关";
         $("save-scope-policy").onclick = async () => {
           const body = Object.fromEntries([["chat_enabled", "scope-chat"], ["chat_blacklisted", "scope-chat-blacklist"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked]));

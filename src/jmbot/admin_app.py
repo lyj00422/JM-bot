@@ -31,6 +31,7 @@ from jmbot.core.sticker_import import StickerImportError, StickerImporter
 
 
 SUPER_ADMIN_ID = 3065532050
+RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.19")
 ALLOWED_PROVIDERS = {
     "ds_school", "ds_official", "glm_school", "glm_official",
     "kimi_school", "kimi_official", "qwen_school", "qwen_official",
@@ -419,6 +420,17 @@ class PersonaBody(BaseModel):
     expected_version: int | None = None
 
 
+class PersonaFieldsBody(BaseModel):
+    personality: str = Field(min_length=1, max_length=20000)
+    behavior_style: str = Field(default="", max_length=12000)
+    reply_style: str = Field(default="", max_length=12000)
+    seed_source: str = Field(default="imported", pattern="^(a|b|imported)$")
+    seed_source_revision: str = Field(default="", max_length=200)
+    seed_snapshot: dict[str, object] | None = None
+    expected_version: int | None = None
+    rebase: bool = False
+
+
 class EffectivePersonaBody(PersonaBody):
     expected_revision: str | None = None
 
@@ -595,9 +607,16 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return native_client.call('native', 'memory', f'qq:{account}:{scope.key}', body.get('action', 'list'), **body.get('arguments', {}))
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
+    async def index() -> Response:
         template = Path(__file__).with_name("templates") / "admin.html"
-        return template.read_text(encoding="utf-8")
+        # The console is an inline single-page app. Never let a desktop tunnel
+        # reopen a stale cached copy after a release; the launcher also adds a
+        # release query parameter for browsers that ignore response headers.
+        return Response(
+            template.read_text(encoding="utf-8"),
+            media_type="text/html",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-JMbot-Release": RELEASE_VERSION},
+        )
 
     @app.post("/api/login")
     async def login(body: LoginBody, request: Request) -> Response:
@@ -901,8 +920,8 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"name": name, "prompt": prompt, "version": version}
 
     @app.get("/api/health")
-    async def health() -> dict[str, bool]:
-        return {"ok": True}
+    async def health() -> dict[str, object]:
+        return {"ok": True, "release": RELEASE_VERSION}
 
     @app.put("/api/persona/default")
     def put_default_persona(body: GlobalPersonaBody, _: int = Depends(require_admin)) -> dict[str, Any]:
@@ -951,6 +970,36 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
         return {"version": version, "effective_persona": state.effective_persona(
             Scope(kind, owner_id), state.get_default_persona("大肥鱼", "")[1],
         )}
+
+    @app.put("/api/scopes/{kind}/{owner_id}/persona/fields")
+    def put_persona_fields(kind: str, owner_id: int, body: PersonaFieldsBody, _: int = Depends(require_admin)) -> dict[str, Any]:
+        scope = Scope(kind, owner_id)
+        snapshot = body.seed_snapshot or {
+            "personality": body.personality,
+            "behavior_style": body.behavior_style,
+            "reply_style": body.reply_style,
+        }
+        try:
+            version = state.set_persona_fields(
+                scope,
+                personality=body.personality,
+                behavior_style=body.behavior_style,
+                reply_style=body.reply_style,
+                seed_source=body.seed_source,
+                seed_source_revision=body.seed_source_revision,
+                seed_snapshot=snapshot,
+                expected_version=body.expected_version,
+                rebase=body.rebase,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        data = state.export_scope(scope)
+        return {
+            "version": version,
+            "persona_fields": data.get("persona_fields", {}),
+            "effective_persona_fields": data.get("effective_persona_fields", {}),
+            "effective_persona": state.effective_persona(scope, state.get_default_persona("大肥鱼", "")[1]),
+        }
 
     @app.post('/api/scopes/{kind}/{owner_id}/persona/refine')
     def refine_persona(kind: str, owner_id: int, _: int = Depends(require_admin)):

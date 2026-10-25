@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 
 from jmbot.admin_app import AdminStore, SUPER_ADMIN_ID, create_admin_app
 from jmbot.core.chat_service import ChatStore
@@ -37,6 +38,35 @@ class AdminAppTest(unittest.TestCase):
         self.assertTrue(any(getattr(route, "path", "") == "/api/persona/default" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/persona/effective" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/download/queue/{job_id}/failed" for route in state))
+        self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/persona/fields" for route in state))
+
+    def test_native_persona_fields_api_saves_and_rebases(self):
+        with TestClient(self.app) as client:
+            login = client.post("/api/login", json={"qq_id": SUPER_ADMIN_ID, "password": "a-strong-test-password"})
+            self.assertEqual(login.status_code, 200)
+            csrf = client.cookies.get("jmbot_csrf")
+            headers = {"X-CSRF-Token": csrf}
+            first = client.put(
+                "/api/scopes/group/123/persona/fields",
+                headers=headers,
+                json={"personality": "A", "behavior_style": "A 行为", "reply_style": "A 回复", "seed_source": "a", "seed_source_revision": "v1", "expected_version": 0},
+            )
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(first.json()["persona_fields"]["seed_source"], "a")
+            edited = client.put(
+                "/api/scopes/group/123/persona/fields",
+                headers=headers,
+                json={"personality": "编辑", "behavior_style": "新行为", "reply_style": "新回复", "seed_source": "b", "seed_source_revision": "v2", "expected_version": 1},
+            )
+            self.assertEqual(edited.status_code, 200, edited.text)
+            self.assertEqual(edited.json()["persona_fields"]["seed_source"], "a")
+            rebased = client.put(
+                "/api/scopes/group/123/persona/fields",
+                headers=headers,
+                json={"personality": "B", "behavior_style": "B 行为", "reply_style": "B 回复", "seed_source": "b", "seed_source_revision": "v2", "rebase": True, "expected_version": 2},
+            )
+            self.assertEqual(rebased.status_code, 200, rebased.text)
+            self.assertEqual(rebased.json()["persona_fields"]["seed_source"], "b")
 
     def test_credentials_never_return_secret(self):
         self.assertTrue(self.chat.get_default_credential("ds_school"))

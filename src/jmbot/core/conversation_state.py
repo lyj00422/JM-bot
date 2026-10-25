@@ -557,6 +557,67 @@ class ConversationStateStore:
             )
         return version
 
+    def set_persona_fields(
+        self,
+        scope: Scope | str,
+        *,
+        personality: str,
+        behavior_style: str = "",
+        reply_style: str = "",
+        seed_source: str = "imported",
+        seed_source_revision: str = "",
+        seed_snapshot: dict[str, object] | None = None,
+        expected_version: int | None = None,
+        rebase: bool = False,
+    ) -> int:
+        """Atomically save the three native personality fields and seed metadata.
+
+        A seed is immutable metadata about the explicit initialization/rebase
+        operation. Editing a field later creates a new persona version but
+        never silently rewrites another scope or the global MaiBot config.
+        """
+        key = scope.key if isinstance(scope, Scope) else self._validate_key(scope)
+        personality, behavior_style, reply_style = (str(value or '').strip() for value in (personality, behavior_style, reply_style))
+        if not personality:
+            raise ValueError("persona personality cannot be empty")
+        if seed_source not in {"a", "b", "imported"}:
+            raise ValueError("seed_source must be a, b or imported")
+        snapshot = seed_snapshot if isinstance(seed_snapshot, dict) else {
+            "personality": personality,
+            "behavior_style": behavior_style,
+            "reply_style": reply_style,
+        }
+        with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("SELECT base_version,seed_source,seed_source_revision,seed_snapshot,initialized_at FROM conversation_personas WHERE scope_key=?", (key,)).fetchone()
+            version = int(row[0]) if row else 0
+            if expected_version is not None and expected_version != version:
+                raise ValueError("persona version changed")
+            if row and not rebase:
+                # A normal field edit must keep the immutable initialization
+                # provenance. Changing the seed is an explicit rebase action.
+                seed_source = str(row[1] or 'imported')
+                seed_source_revision = str(row[2] or '')
+                try:
+                    snapshot = json.loads(row[3] or '{}')
+                except (TypeError, ValueError):
+                    snapshot = {}
+                initialized_at = row[4] or time.time()
+            else:
+                initialized_at = time.time()
+            conn.execute('UPDATE state_revision SET version=version+1 WHERE id=1')
+            version += 1
+            conn.execute(
+                "INSERT INTO conversation_personas(scope_key,base_prompt,behavior_style,reply_style,seed_source,seed_source_revision,seed_snapshot,initialized_at,base_version,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope_key) DO UPDATE SET "
+                "base_prompt=excluded.base_prompt,behavior_style=excluded.behavior_style,reply_style=excluded.reply_style,"
+                "seed_source=excluded.seed_source,seed_source_revision=excluded.seed_source_revision,seed_snapshot=excluded.seed_snapshot,"
+                "initialized_at=COALESCE(conversation_personas.initialized_at,excluded.initialized_at),base_version=excluded.base_version,updated_at=excluded.updated_at",
+                (key, personality, behavior_style, reply_style, seed_source, str(seed_source_revision or ''),
+                 json.dumps(snapshot, ensure_ascii=False), initialized_at, version, time.time()),
+            )
+        return version
+
     def replace_effective_persona(self, scope: Scope | str, prompt: str, *, expected_version: int | None = None, expected_revision: str | None = None) -> int:
         """Bake the persona currently in effect into the scope base persona.
 

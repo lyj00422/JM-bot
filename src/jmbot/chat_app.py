@@ -300,6 +300,54 @@ def create_chat_app():
             raise HTTPException(403, 'runtime lease expired')
         return {'ok': True}
 
+    def _runtime_entry(request: Request):
+        bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
+        for identity, entry in pool.processes.items():
+            if entry['process'].returncode is None and secrets.compare_digest(entry['token'], bearer):
+                return identity, entry
+        raise HTTPException(403, 'runtime lease expired')
+
+    def _runtime_scope_context(identity: str, scope: str) -> dict:
+        scope = ConversationStateStore._validate_key(scope)
+        if not state.permitted(scope):
+            raise HTTPException(403, 'scope policy disabled')
+        account = identity.split(':', 2)[1]
+        fields = state.effective_persona_fields(scope, state.get_default_persona('', '')[1])
+        return {
+            'scope': scope,
+            'account': account,
+            'enabled': True,
+            'policy_revision': state.authorization_revision(scope),
+            'persona_revision': state.persona_revision(scope),
+            'persona_version': fields.get('persona_version', 0),
+            'persona': fields.get('personality') or state.get_default_persona('', '')[1],
+            'behavior_style': fields.get('behavior_style', ''),
+            'reply_style': fields.get('reply_style', ''),
+            'seed_source': fields.get('seed_source', 'imported'),
+            'seed_source_revision': fields.get('seed_source_revision', ''),
+            'seed_snapshot': fields.get('seed_snapshot', {}),
+            'growth_enabled': state.get_policy(scope).growth_enabled,
+        }
+
+    @app.get('/native/policy/{kind}/{owner}')
+    async def native_policy(kind: str, owner: int, request: Request):
+        identity, _ = _runtime_entry(request)
+        return _runtime_scope_context(identity, f'{kind}:{owner}')
+
+    @app.get('/native/session-context/{session_id}')
+    async def native_session_context(session_id: str, request: Request):
+        identity, _ = _runtime_entry(request)
+        runtime_dir = pool.directory(identity)
+        mapping_file = runtime_dir / 'scope-sessions.json'
+        try:
+            mapping = json.loads(mapping_file.read_text(encoding='utf-8'))
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            mapping = {}
+        scope = mapping.get(session_id) if isinstance(mapping, dict) else None
+        if not isinstance(scope, str):
+            raise HTTPException(404, 'native session mapping unavailable')
+        return _runtime_scope_context(identity, scope)
+
     @app.get('/native/context')
     async def native_context(request: Request):
         grant, _ = grant_for(request)
@@ -402,6 +450,28 @@ def create_chat_app():
         body['model'] = binding['model']
         body['stream'] = False
         workload = request.headers.get('x-jm-workload', 'interactive')
+        declared_scope = request.headers.get('x-jm-scope', '').strip()
+        if declared_scope and declared_scope != grant['scope']:
+            raise HTTPException(403, 'model scope metadata mismatch')
+        declared_persona = request.headers.get('x-jm-persona-version', '').strip()
+        if declared_persona and declared_persona != state.persona_revision(grant['scope']):
+            raise HTTPException(409, 'persona changed during model request')
+        capture_enabled = os.environ.get('JM_BOT_CAPTURE_PROMPTS', '').lower() in {'1', 'true', 'yes', 'on'}
+        if capture_enabled:
+            capture_dir = data / 'prompt-captures'
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            capture = {
+                'scope': grant['scope'],
+                'persona_revision': state.persona_revision(grant['scope']),
+                'persona_version': state.effective_persona_fields(grant['scope'], state.get_default_persona('', '')[1]).get('persona_version', 0),
+                'session_id': request.headers.get('x-jm-session-id', ''),
+                'task': task,
+                'workload': workload,
+                'messages': body.get('messages', []),
+                'captured_at': time.time(),
+            }
+            capture_path = capture_dir / (f'{int(time.time() * 1000)}-{secrets.token_hex(4)}.json')
+            capture_path.write_text(json.dumps(capture, ensure_ascii=False), encoding='utf-8')
         sticker = workload == 'sticker'
         background = workload == 'background' or task in {'memory', 'mid_memory', 'learner', 'embedding', 'image_embedding'}
         if sticker:

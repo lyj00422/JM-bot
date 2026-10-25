@@ -13,9 +13,11 @@ import copy
 import functools
 import json
 import os
+import threading
 
 
 current_scope = ContextVar('jmbot_native_scope', default=None)
+current_session_id = ContextVar('jmbot_native_session_id', default='')
 
 
 class NativeSessions:
@@ -25,6 +27,29 @@ class NativeSessions:
         self.session_scopes = {}
         self.automation = {}
         self.emoji_caches = []
+        # The official plugin runtime runs in a child process and receives
+        # only serialized hook payloads. Keep the authoritative native
+        # session -> business scope mapping in a small atomic file so the
+        # coordinator can answer policy/persona lookups without guessing a
+        # hash or exposing another session database.
+        self.session_map_path = Path(os.environ.get('MAIBOT_INSTANCE_DIR', Path.cwd())) / 'scope-sessions.json'
+        self._session_map_lock = threading.RLock()
+
+    def _persist_session_scope(self, session_id, scope):
+        if not session_id or scope not in self.contexts:
+            return
+        with self._session_map_lock:
+            mapping = {}
+            try:
+                mapping = json.loads(self.session_map_path.read_text(encoding='utf-8'))
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                pass
+            if not isinstance(mapping, dict):
+                mapping = {}
+            mapping[str(session_id)] = scope
+            temporary = self.session_map_path.with_suffix('.json.tmp')
+            temporary.write_text(json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
+            os.replace(temporary, self.session_map_path)
 
     def update(self, context):
         from src.config.official_configs import LearningItem
@@ -84,20 +109,27 @@ class NativeSessions:
         session = chat_manager.sessions.get(session_id)
         mapped = self.session_scopes.get(session_id)
         if mapped in self.contexts:
+            self._persist_session_scope(session_id, mapped)
             return mapped
         if session is None or session.scope not in self.contexts:
             raise PermissionError('native session has no authorized scope')
+        self.session_scopes[session_id] = session.scope
+        self._persist_session_scope(session_id, session.scope)
         return session.scope
 
     @contextmanager
-    def bind(self, scope):
+    def bind(self, scope, session_id=None):
         if scope not in self.contexts:
             raise PermissionError('unregistered native scope')
-        token = current_scope.set(scope)
+        scope_token = current_scope.set(scope)
+        session_token = current_session_id.set(
+            str(session_id) if session_id is not None else current_session_id.get()
+        )
         try:
             yield
         finally:
-            current_scope.reset(token)
+            current_session_id.reset(session_token)
+            current_scope.reset(scope_token)
 
     def context(self, scope=None):
         scope = scope or current_scope.get()
@@ -126,6 +158,7 @@ class NativeSessions:
             if scope not in self.contexts:
                 raise PermissionError('message registered outside native scope')
             self.session_scopes[message.session_id] = scope
+            self._persist_session_scope(message.session_id, scope)
             return result
         chat_manager.register_message = register_message
         from src.maisaka.runtime import MaisakaHeartFlowChatting
@@ -135,7 +168,7 @@ class NativeSessions:
             @functools.wraps(original)
             async def scoped(instance, *args, **kwargs):
                 scope = self.scope_for_session(session(instance))
-                with self.bind(scope):
+                with self.bind(scope, session_id=session(instance)):
                     return await original(instance, *args, **kwargs)
             setattr(owner, name, scoped)
         for name in ('start', 'stop', 'register_message', 'run_sub_agent', '_recognize_sent_images'):
@@ -145,7 +178,7 @@ class NativeSessions:
         @functools.wraps(refresh)
         async def start_round(engine, *args, **kwargs):
             scope = self.scope_for_session(engine._runtime.session_id)
-            with self.bind(scope):
+            with self.bind(scope, session_id=engine._runtime.session_id):
                 if hasattr(self, 'refresh'):
                     await self.refresh(scope)
                 return await refresh(engine, *args, **kwargs)
@@ -156,7 +189,7 @@ class NativeSessions:
         async def execute(orchestrator, *args, **kwargs):
             session_id = kwargs.get('session_id') or getattr(orchestrator, 'session_id', '')
             scope = self.scope_for_session(session_id) if session_id else current_scope.get()
-            with self.bind(scope):
+            with self.bind(scope, session_id=session_id):
                 return await original_execute(orchestrator, *args, **kwargs)
         LLMOrchestrator._execute_request = execute
         self.install_background_scopes()

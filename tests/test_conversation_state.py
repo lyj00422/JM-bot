@@ -150,6 +150,57 @@ class ConversationStateTest(unittest.TestCase):
         self.assertTrue(policy.chat_blacklisted)
         self.assertTrue(policy.download_blacklisted)
 
+    def test_native_persona_fields_keep_seed_snapshot_until_explicit_rebase(self):
+        scope = Scope("group", 101)
+        version = self.store.set_persona_fields(
+            scope,
+            personality="A 性格",
+            behavior_style="A 行为",
+            reply_style="A 回复",
+            seed_source="a",
+            seed_source_revision="growth-v4",
+        )
+        self.assertEqual(version, 1)
+        first = self.store.get_persona_fields(scope)
+        self.assertEqual(first["seed_source"], "a")
+        self.assertEqual(first["seed_snapshot"]["personality"], "A 性格")
+        edited = self.store.set_persona_fields(
+            scope,
+            personality="编辑后的性格",
+            behavior_style="新的行为",
+            reply_style="新的回复",
+            seed_source="b",
+            seed_source_revision="webui-v9",
+            expected_version=version,
+        )
+        self.assertEqual(edited, 2)
+        current = self.store.get_persona_fields(scope)
+        self.assertEqual(current["personality"], "编辑后的性格")
+        self.assertEqual(current["seed_source"], "a")
+        self.assertEqual(current["seed_source_revision"], "growth-v4")
+        rebased = self.store.set_persona_fields(
+            scope,
+            personality="B 性格",
+            behavior_style="B 行为",
+            reply_style="B 回复",
+            seed_source="b",
+            seed_source_revision="webui-v9",
+            expected_version=edited,
+            rebase=True,
+        )
+        self.assertEqual(rebased, 3)
+        current = self.store.get_persona_fields(scope)
+        self.assertEqual(current["seed_source"], "b")
+        self.assertEqual(current["seed_snapshot"]["reply_style"], "B 回复")
+
+    def test_native_persona_fields_reject_stale_version_without_revision_change(self):
+        scope = Scope("private", 202)
+        version = self.store.set_persona_fields(scope, personality="初始")
+        revision = self.store.revision()
+        with self.assertRaisesRegex(ValueError, "persona version changed"):
+            self.store.set_persona_fields(scope, personality="过期编辑", expected_version=version - 1)
+        self.assertEqual(self.store.revision(), revision)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -109,7 +109,7 @@ async def run():
     sessions.update(context)
     sessions.install()
     from jmbot.native_model_work import install_headers
-    install_headers()
+    install_headers(sessions)
     from jmbot.native_emoji import install as install_emoji, validate_image
     install_emoji(sessions)
     class ScopedHeaders(dict):
