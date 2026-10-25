@@ -1,0 +1,14 @@
+[Unit]
+Description=USTC iWAN HTTP proxy for JMbot chat API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/iwan-client-oidc --connect --server 1 --http --http-listen 127.0.0.1:18080 --config-dir /etc/sdwan/ustc-iwan
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

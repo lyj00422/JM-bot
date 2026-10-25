@@ -1,6 +1,6 @@
 # 拆分服务安装与迁移
 
-本次代码实现不部署服务器。入口为下载 main.py、原生聊天 main_chat.py、后台 main_admin.py；main_migrate.py 负责离线备份、核验、恢复与迁移。
+入口为下载 main.py、原生聊天 main_chat.py、后台 main_admin.py；main_migrate.py 负责离线备份、核验、恢复与迁移。2026-10-25 已只读核对线上运行源码并同步本地实现；本手册的当前架构以该次核对为准，历史事故与迁移记录保留当时背景。P0 作用域验证尚未通过，当前更新仍按 split 链路发布，见 [native-scope-spike.md](native-scope-spike.md)。
 
 ## 环境与配置
 
@@ -10,7 +10,7 @@
 
 将 deploy/model-routes.example.json 复制至指定配置路径，填写真实学校网关和模型名；embedding 维度必须与模型一致。各官方连接分别添加 ds_official、glm_official、kimi_official、qwen_official，不能将学校 Key 当官方 Key。任务不跨服务商借用凭据。planner、replyer、utils 必需；长期记忆需要 memory 和 embedding，缺任一项则停用原生记忆插件。视觉使用 vlm，自动表情识别使用 emoji，未确认能力保持 disabled。图片 embedding 开启时须提供实际供应商协议的 image_embedding_input 或 image_embedding_body 模板。语音传输尚不可用，校验拒绝启用 voice。
 
-仅启动一个账号的单个 MaiBot 原生进程，各群/私聊使用独立 session、授权令牌、配置与数据库，关闭会合并聊天的 Focus 模式。模型网关只并发执行一个请求，按会话轮转；仅显式 @bot 提权，等待超过 15 秒的会话优先获得机会。热门群可以继续接话，不能持续挤掉其他有待办的会话。原始事件队列最多 128 条、每会话 16 条，过载优先丢弃被动消息；模型队列每会话最多 8 条。默认最多缓存 8 个原生会话，空闲 300 秒回收；没有可安全回收的会话时等待最多 120 秒。没有增加时间禁言。
+仅启动一个账号的单个 MaiBot 原生进程，各群/私聊使用独立 session、授权令牌、配置与数据库，关闭会合并聊天的 Focus 模式。前台模型队列有 2 个 worker，后台模型队列有 1 个 worker；记忆、学习、embedding 等后台工作单独调度，供应商及任务并发限制另外生效。这些队列容量由当前代码设置，旧的 JM_BOT_MODEL_WORKERS 和 JM_BOT_NATIVE_INSTANCE_LIMIT 不是此实现的调节入口。队列按会话轮转；仅显式 @bot 提权，等待超过 15 秒的会话优先获得机会。热门群可以继续接话，不能持续挤掉其他有待办的会话。原始事件队列最多 128 条、每会话 16 条，过载优先丢弃被动消息；模型队列每会话最多 8 条。默认最多缓存 8 个原生会话，空闲 300 秒回收；没有可安全回收的会话时等待最多 120 秒。没有增加时间禁言。
 
 默认 JM_BOT_EMOJI_MODE=selector：文本 Planner 决定发表情后，由独立视觉子代理看最多 8 张候选并返回编号。emoji 任务启用时必须具备 visual 能力，否则需显式配置 vlm。planner 模式使用原生 show_emoji_list 和 reply.attach_emoji，需要 planner 同时具备 visual、tools 能力；只有单独的 vlm 不够。无效编号拒绝发送，单次最多发送一张图片。自动收藏按来源会话持久记录所有权，群间不共享；全局人工审核种子库仅按显式授权可见。
 
@@ -20,7 +20,9 @@
 
 单实例、上下文和队列预算用于降低内存压力，不能代替生产 RSS 与峰值负载验收。后续服务器变更计划可包含 2 GiB swap 缓冲；本轮代码交付不创建 swap、不重启服务、不宣称 OOM 已消除。
 
-自动收藏表情单张大小由 JM_BOT_EMOJI_MAX_SIZE_MB 覆盖；未设置时沿用上游默认 5 MiB。当前 QQ 媒体入口最多接受 8 MiB、3200 万像素，因此可配置为 8。JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES 控制已缓存文件的注册扫描间隔；当前部署为 1 分钟，避免会话轮换时反复等待默认 10 分钟。原生实例启动时重新生成 bot_config.toml，不应只修改实例内的配置文件。此设置不改变注册表情池数量，也不代表媒体获取和自动注册已经成功。
+自动收藏表情单张大小由 JM_BOT_EMOJI_MAX_SIZE_MB 覆盖；未设置时沿用上游默认 5 MiB。当前 QQ 媒体入口最多接受 8 MiB、3200 万像素，因此可配置为 8。JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES 控制上游相关扫描间隔；自写表情维护循环另有 60 秒轮询。JM_BOT_EMOJI_COLLECTION_LIMIT 控制收藏上限，默认 256。发送自定义表情通过 qq_stickers 封装设置 NapCat 原生 image.sub_type=1，并区分发送尝试与确认，避免结果不明时重复发送。
+
+原生实例启动时重新生成 bot_config.toml，且配置 watcher 被接入代码关闭。人设由 JMbot 状态库按会话注入，原生 WebUI 当前关闭；不要直接修改实例配置文件来代替后台人设。原生字段与 WebUI 的关系见 [maibot-persona.md](maibot-persona.md)。
 
 阅读上游 EULA.md 和 PRIVACY.md，再将 JM_BOT_MAIBOT_TERMS_ACCEPTED 设置为锁定 SHA。程序不替使用者自动同意条款。
 

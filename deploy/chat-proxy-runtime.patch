@@ -1,0 +1,29 @@
+--- a/src/jmbot/core/chat_service.py
++++ b/src/jmbot/core/chat_service.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+
+ import json
++import os
+ import re
+ import sqlite3
+@@ -414,4 +414,5 @@ def request_chat_completion(
+     timeout_seconds: int,
+     json_output: bool = False,
+ ) -> str:
++    proxy = os.environ.get("JM_BOT_CHAT_PROXY", "").strip()
+     payload: dict[str, object] = {
+@@ -433,5 +434,12 @@ def request_chat_completion(
+         method="POST",
+     )
+     try:
+-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
++        if proxy:
++            opener = urllib.request.build_opener(
++                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
++            )
++            response_context = opener.open(request, timeout=timeout_seconds)
++        else:
++            response_context = urllib.request.urlopen(request, timeout=timeout_seconds)
++        with response_context as response:
+             body = json.loads(response.read().decode("utf-8"))

@@ -13,7 +13,7 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
     class QQTransport:
         loop = None
 
-        def send(self, account, scope, segments, configuration=False):
+        def send(self, account, scope, segments, configuration=False, request_id=None):
             from nonebot import get_bot
             from jmbot.core.conversation_state import ConversationStateStore
             scope = ConversationStateStore._validate_key(scope)
@@ -33,6 +33,11 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
                 elif kind == 'image':
                     if not str(data.get('file', '')).startswith('base64://') or len(data['file']) > 12 * 1024 * 1024:
                         raise ValueError('only bounded binary images permitted')
+                    if type(data.get('sub_type', 0)) is not int or data.get('sub_type', 0) not in {0, 1}:
+                        raise ValueError('unsupported QQ picture subtype')
+                    if data.get('sub_type') == 1:
+                        from jmbot.native_emoji import validate_image
+                        validate_image(base64.b64decode(data['file'][9:], validate=True))
                 elif kind == 'face':
                     from jmbot.core.chat_service import SUPER_FACES
                     if data.get('id') not in SUPER_FACES:
@@ -46,16 +51,19 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
                     raise ValueError('chat permission revoked')
                 bot = get_bot(str(account))
                 kind, owner = scope.split(':')
-                return await bot.call_api('send_group_msg' if kind == 'group' else 'send_private_msg',
+                result = await bot.call_api('send_group_msg' if kind == 'group' else 'send_private_msg',
                                           **{'group_id' if kind == 'group' else 'user_id': int(owner)}, message=segments)
+                if not isinstance(result, dict) or not result.get('message_id'):
+                    raise RuntimeError('QQ send outcome unconfirmed; do not resend')
+                return result
             return asyncio.run_coroutine_threadsafe(invoke(), self.loop).result(20)
 
-        def send_configuration(self, account, scope, segments):
+        def send_configuration(self, account, scope, segments, request_id=None):
             if not scope.startswith('private:') or any(item.get('type') != 'text' for item in segments):
                 raise ValueError('configuration replies must be private text')
             if chat_state.get_policy(scope).chat_blacklisted:
                 raise ValueError('configuration reply blocked')
-            return self.send(account, scope, segments, configuration=True)
+            return self.send(account, scope, segments, configuration=True, request_id=request_id)
 
         def media(self, account, scope, file):
             from nonebot import get_bot

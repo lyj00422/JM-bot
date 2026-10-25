@@ -64,7 +64,9 @@ def test_shared_runtime_grants_isolate_send_and_revoke_one_scope(tmp_path, monke
         assert client.get('/native/context', headers=first).json()['scope'] == 'group:1'
         assert client.get('/native/context', headers=second).json()['scope'] == 'group:2'
         assert client.get('/native/status', headers={'Authorization': 'Bearer runtime-token'}).status_code == 403
-        assert client.post('/native/send', headers=first, json={'message': [{'type': 'text', 'data': {'text': 'hi'}}]}).status_code == 200
+        assert client.post('/native/send', headers=first, json={'message': [{'type': 'text', 'data': {'text': 'hi'}}]}).status_code == 400
+        assert not sends
+        assert client.post('/native/send', headers=first, json={'request_id': 'test-native-send-1', 'message': [{'type': 'text', 'data': {'text': 'hi'}}]}).status_code == 200
         assert sends[-1][1] == 'group:1'
         state = ConversationStateStore(tmp_path / 'state.db')
         state.set_policy('group:1', chat_blacklisted=True)

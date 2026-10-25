@@ -104,7 +104,8 @@ class FairChatScheduler:
             if passive:
                 queue.append(job)
             else:
-                priority_index = next((index for index, item in enumerate(queue) if item.passive), len(queue))
+                priority_index = next((index for index, item in enumerate(queue)
+                    if item.passive or (priority and not item.priority and time.monotonic() - item.queued_at < 15)), len(queue))
                 queue.insert(priority_index, job)
             if scope not in self._ready_set:
                 self._ready.append(scope)

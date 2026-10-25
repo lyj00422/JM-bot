@@ -22,6 +22,8 @@ async def run():
     from src.config.model_configs import APIProvider, ModelInfo, ModelTaskConfig, TaskConfig
     from src.config.official_configs import LearningItem
     config = Config()
+    from jmbot.native_emoji import collection_limit
+    config.emoji.max_reg_num = collection_limit()
     if 'JM_BOT_EMOJI_MAX_SIZE_MB' in os.environ:
         config.emoji.max_emoji_size_mb = float(os.environ['JM_BOT_EMOJI_MAX_SIZE_MB'])
     if 'JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES' in os.environ:
@@ -100,6 +102,8 @@ async def run():
     sessions = NativeSessions(config, config_manager.model_config, context)
     sessions.update(context)
     sessions.install()
+    from jmbot.native_model_work import install_headers
+    install_headers()
     from jmbot.native_emoji import install as install_emoji, validate_image
     install_emoji(sessions)
     class ScopedHeaders(dict):
@@ -207,7 +211,9 @@ async def run():
                     if seg.data.strip():
                         segments.append({'type': 'text', 'data': {'text': seg.data}})
                 elif seg.type in {'image', 'emoji'} and not visual_sent:
-                    segments.append({'type': 'image', 'data': {'file': 'base64://' + seg.data}})
+                    from jmbot.qq_stickers import sticker_segment_base64
+                    segments.append(sticker_segment_base64(seg.data) if seg.type == 'emoji' else
+                                    {'type': 'image', 'data': {'file': 'base64://' + seg.data}})
                     visual_sent = True
                 elif seg.type == 'at':
                     target = seg.data if isinstance(seg.data, str) else seg.data.get('user_id', '')
@@ -216,10 +222,9 @@ async def run():
                     segments.insert(0, {'type': 'reply', 'data': {'id': str(seg.data)}})
             if not segments:
                 return DeliveryReceipt(message.message_id, route_key, DeliveryStatus.SENT, driver_id=self.driver_id)
-            result = await client.post(context['gateway'] + '/native/send', headers=headers,
-                                       json={'request_id': message.message_id, 'message': segments})
-            result.raise_for_status()
-            receipt = result.json()
+            from jmbot.qq_stickers import send_native_message
+            receipt = await send_native_message(client, context['gateway'] + '/native/send', headers=headers,
+                                                 message_id=message.message_id, segments=segments)
             return DeliveryReceipt(message.message_id, route_key, DeliveryStatus.SENT, driver_id=self.driver_id,
                                    external_message_id=str(receipt.get('message_id', '')))
 

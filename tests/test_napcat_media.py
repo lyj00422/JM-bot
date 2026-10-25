@@ -22,6 +22,8 @@ def media_transport(tmp_path, monkeypatch):
 
     async def call_api(action, **kwargs):
         calls.append((action, kwargs))
+        if action in {'send_group_msg', 'send_private_msg'}:
+            return {'message_id': 'sent-1'}
         return result
 
     monkeypatch.setitem(sys.modules, 'nonebot', SimpleNamespace(get_bot=lambda account: SimpleNamespace(call_api=call_api)))
@@ -63,3 +65,14 @@ def test_media_still_rejects_untrusted_paths_and_urls(media_transport):
         result['file'] = value
         with pytest.raises(ValueError):
             transport.media('2661195769', 'private:3065532050', 'opaque-image-id')
+
+
+def test_send_accepts_stable_rpc_request_id(media_transport):
+    transport, _, _, calls = media_transport
+    result = transport.send(
+        '2661195769', 'private:3065532050',
+        [{'type': 'text', 'data': {'text': 'configured'}}],
+        request_id='send-once-1',
+    )
+    assert result['message_id'] == 'sent-1'
+    assert calls[-1] == ('send_private_msg', {'user_id': 3065532050, 'message': [{'type': 'text', 'data': {'text': 'configured'}}]})

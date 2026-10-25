@@ -65,14 +65,16 @@ def create_chat_app():
         role = load_chat_role(Path(os.environ.get('JM_BOT_CHAT_ROLE', 'data/chat_role.json')))
         state.set_default_persona(role.name, role.system_prompt)
     admins = RemoteStore(RPCClient(os.environ.get('JM_BOT_ADMIN_SERVICE_URL', 'http://127.0.0.1:8081'), token), 'admin')
-    download = RPCClient(os.environ.get('JM_BOT_DOWNLOAD_SERVICE_URL', 'http://127.0.0.1:8080'), token)
+    download = RPCClient(os.environ.get('JM_BOT_DOWNLOAD_SERVICE_URL', 'http://127.0.0.1:8080'), token, timeout=25)
     pool = NativePool(data / 'instances')
     inbox = IngressQueue(maxsize=128)
-    scheduler = FairChatScheduler(workers=1, per_scope_limit=8)
+    scheduler = FairChatScheduler(workers=2, per_scope_limit=8)
+    background_scheduler = FairChatScheduler(workers=1, per_scope_limit=8)
     grants = {}
     failures = {}
     provider_limits = {}
     task_limits = {}
+    background_limits = {}
     from jmbot.model_routes import ModelRoutes
     model_routes = ModelRoutes(os.environ.get('JM_BOT_MODEL_ROUTES', 'config/model-routes.json'))
     store_lock = threading.RLock()
@@ -110,7 +112,8 @@ def create_chat_app():
         async def execute():
             semaphore = provider_limits.setdefault(provider, asyncio.Semaphore(2))
             task_semaphore = task_limits.setdefault((provider, 'learner', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
-            async with semaphore, task_semaphore:
+            background = background_limits.setdefault(provider, asyncio.Semaphore(1))
+            async with background, task_semaphore, semaphore:
                 if not state.permitted(scope) or (require_growth and not state.get_policy(scope).growth_enabled):
                     raise ValueError('growth permission revoked')
                 async with httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
@@ -121,7 +124,7 @@ def create_chat_app():
                     if not state.permitted(scope) or resolve(scope) != (key, provider):
                         raise ValueError('growth permission or credential changed')
                     return {'content': result.json()['choices'][0]['message']['content'], 'provider': provider, 'model': binding['model']}
-        return await scheduler.submit('qq:' + os.environ.get('JM_BOT_QQ_ACCOUNT', '') + ':' + scope, execute, passive=False, timeout=180)
+        return await background_scheduler.submit('qq:' + os.environ.get('JM_BOT_QQ_ACCOUNT', '') + ':' + scope, execute, passive=False, timeout=180)
 
     from jmbot.growth_worker import GrowthWorker
     from jmbot.persona_refinery import PersonaRefinery
@@ -177,7 +180,7 @@ def create_chat_app():
                            'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
                            'emoji_mode': os.environ.get('JM_BOT_EMOJI_MODE', 'selector')}
                 if route.direct:
-                    grant['priority_until'] = time.monotonic() + 20
+                    grant['priority_until'] = time.monotonic() + 180
                 context['write_barrier'] = str((data / 'policy-write.lock').resolve())
                 await pool.deliver(identity, event, context)
                 if policy.growth_enabled:
@@ -223,6 +226,7 @@ def create_chat_app():
             'native': {'status', 'memory'},
             'stickers': {'template_bytes', 'preview_bytes', 'confirm_preview', 'catalog', 'review'}, 'ingress': {'accept'}})
         await scheduler.start()
+        await background_scheduler.start()
         workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run()), asyncio.create_task(growth.maintain())]
         try:
             yield
@@ -232,6 +236,7 @@ def create_chat_app():
             await asyncio.gather(*workers, return_exceptions=True)
             await pool.close()
             await scheduler.close()
+            await background_scheduler.close()
             lease.close()
 
     app = FastAPI(title='JMbot native chat service', lifespan=lifespan)
@@ -276,13 +281,16 @@ def create_chat_app():
 
     @app.get('/health')
     async def health():
-        return {'ok': True, 'inbox': inbox.qsize(), 'native': pool.snapshot(), 'failures': failures, 'model_queue': scheduler.snapshot()}
+        return {'ok': True, 'inbox': inbox.qsize(), 'native': pool.snapshot(), 'failures': failures,
+                'model_queue': scheduler.snapshot(), 'background_model_queue': background_scheduler.snapshot()}
 
     @app.post('/native/send')
     async def native_send(request: Request):
         grant, _ = grant_for(request)
         body = await request.json()
         segments = body.get('message', [])
+        if not isinstance(body.get('request_id'), str) or not body['request_id'] or len(body['request_id']) > 200:
+            raise HTTPException(400, 'stable send request_id required')
         if not isinstance(segments, list) or len(segments) > 32:
             raise HTTPException(400, 'invalid outbound message')
         def deliver():
@@ -308,6 +316,8 @@ def create_chat_app():
     async def send_sticker(request: Request):
         grant, _ = grant_for(request)
         body = await request.json()
+        if not isinstance(body.get('request_id'), str) or not body['request_id'] or len(body['request_id']) > 200:
+            raise HTTPException(400, 'stable send request_id required')
         rows = await asyncio.to_thread(stickers.catalog)
         row = next((item for item in rows if str(item.get('id', '')).isdigit() and int(item['id']) == body.get('id') and item.get('approved', True)
                     and item.get('scope', 'global') in {'global', grant['scope'], grant['identity']}), None)
@@ -319,8 +329,9 @@ def create_chat_app():
         def deliver():
             with barrier.hold():
                 grant_for(request)
+                from jmbot.qq_stickers import sticker_segment
                 return download.call('qq', 'send', grant['account'], grant['scope'],
-                    [{'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(path.read_bytes()).decode()}}], request_id=body.get('request_id'))
+                    [sticker_segment(path.read_bytes())], request_id=body['request_id'])
         return await asyncio.to_thread(deliver)
 
     @app.post('/native/model/{task}/{operation:path}')
@@ -347,39 +358,58 @@ def create_chat_app():
             body = json.loads(payload)
         except ValueError:
             raise HTTPException(400, 'only JSON model requests are supported') from None
+        if not isinstance(body, dict):
+            raise HTTPException(400, 'model request must be a JSON object')
+        messages = body.get('messages', [])
+        if not isinstance(messages, list) or len(messages) > 64:
+            raise HTTPException(400, 'invalid model messages')
+        if any(not isinstance(message, dict) for message in messages):
+            raise HTTPException(400, 'invalid model message')
         body['model'] = binding['model']
         body['stream'] = False
+        workload = request.headers.get('x-jm-workload', 'interactive')
+        sticker = workload == 'sticker'
+        background = workload == 'background' or task in {'memory', 'mid_memory', 'learner', 'embedding', 'image_embedding'}
+        if sticker:
+            try:
+                body['max_tokens'] = min(int(body.get('max_tokens', 1024)), 1024)
+            except (TypeError, ValueError):
+                raise HTTPException(400, 'invalid max_tokens') from None
+        queued_at = time.monotonic()
         for message in body.get('messages', []):
             if isinstance(message.get('content'), list) and any(part.get('type') in {'image_url', 'input_image'} for part in message['content'] if isinstance(part, dict)) and not binding.get('visual', task == 'vlm'):
                 raise HTTPException(409, 'image input requires an explicit vision task')
         async def execute():
+            from jmbot.model_request import fetch_model, ModelUnavailable
+            from contextlib import AsyncExitStack
+            import logging
             grant_for(request)
             semaphore = provider_limits.setdefault(grant['provider'], asyncio.Semaphore(2))
             task_semaphore = task_limits.setdefault((grant['provider'], task, binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
-            async with semaphore, task_semaphore:
+            async with AsyncExitStack() as stack:
+                if background:
+                    await stack.enter_async_context(background_limits.setdefault(grant['provider'], asyncio.Semaphore(1)))
+                # Waiting for a task slot must not reserve a supplier slot.
+                await stack.enter_async_context(task_semaphore)
+                await stack.enter_async_context(semaphore)
                 grant_for(request)
+                started = time.monotonic()
+                logging.getLogger('uvicorn.error').info('model_start scope=%s task=%s workload=%s queue_seconds=%.3f', grant['scope'], task, workload, started - queued_at)
                 async with httpx.AsyncClient(timeout=60, follow_redirects=False, trust_env=False, proxy=chat_proxy()) as client:
                     try:
-                        async with client.stream('POST', route['base_url'].rstrip('/') + '/' + operation,
-                                                 headers={'Authorization': 'Bearer ' + key}, json=body) as response:
-                            if response.status_code >= 400:
-                                raise HTTPException(502, 'model provider rejected task')
-                            parts, received = [], 0
-                            async for part in response.aiter_bytes():
-                                received += len(part)
-                                if received > 4 * 1024 * 1024:
-                                    raise HTTPException(502, 'model response exceeds memory budget')
-                                parts.append(part)
-                            content = b''.join(parts)
-                    except httpx.HTTPError:
+                        content = await fetch_model(client, route['base_url'].rstrip('/') + '/' + operation,
+                            headers={'Authorization': 'Bearer ' + key}, body=body, retry=sticker)
+                    except ModelUnavailable:
                         raise HTTPException(502, 'model provider unavailable') from None
+                    finally:
+                        logging.getLogger('uvicorn.error').info('model_finish scope=%s task=%s provider_seconds=%.3f', grant['scope'], task, time.monotonic() - started)
             grant_for(request)
-            if response.status_code >= 400:
-                raise HTTPException(502, 'model provider rejected task')
             # Return model protocol data only; never forward provider headers/errors.
             return Response(content, media_type='application/json')
         try:
-            result = await scheduler.submit(grant['identity'], execute, priority=time.monotonic() < grant.get('priority_until', 0), timeout=90)
+            queue = background_scheduler if background else scheduler
+            result = await queue.submit(grant['identity'], execute,
+                priority=sticker or time.monotonic() < grant.get('priority_until', 0), timeout=150)
             if result is None:
                 raise HTTPException(429, 'background model task superseded')
             return result
@@ -407,7 +437,8 @@ def create_chat_app():
                 async def execute():
                     semaphore = provider_limits.setdefault(provider, asyncio.Semaphore(2))
                     task_semaphore = task_limits.setdefault((provider, 'vlm', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
-                    async with semaphore, task_semaphore, httpx.AsyncClient(timeout=60, trust_env=False, proxy=chat_proxy()) as client:
+                    background = background_limits.setdefault(provider, asyncio.Semaphore(1))
+                    async with background, task_semaphore, semaphore, httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
                         if not state.permitted(scope):
                             raise ValueError('scope revoked')
                         response = await client.post(route['base_url'].rstrip('/') + '/chat/completions', headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'messages': [{'role': 'user', 'content': content}], 'max_tokens': 3000, 'temperature': 0})
@@ -423,7 +454,7 @@ def create_chat_app():
                             raise ValueError('draft ID mismatch')
                         edits.append({**old, **{name: candidate[name] for name in ('meaning', 'use_when', 'avoid_when', 'emotion_tags', 'tone', 'relationship')}})
                     return {'edits': edits, 'requires_review': True, 'provider': provider, 'model': binding['model']}
-                return await scheduler.submit('sticker-draft:' + scope, execute, passive=True, timeout=90)
+                return await background_scheduler.submit('sticker-draft:' + scope, execute, passive=True, timeout=150)
             return asyncio.run_coroutine_threadsafe(invoke(), app.state.loop).result(95)
 
     app.state.sticker_draft = StickerDraft()

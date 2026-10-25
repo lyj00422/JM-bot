@@ -22,6 +22,7 @@ class NativeSessions:
     def __init__(self, base_config, base_models, runtime):
         self.base_config, self.base_models, self.runtime = base_config, base_models, runtime
         self.contexts, self.configs, self.models = {}, {}, {}
+        self.session_scopes = {}
         self.automation = {}
         self.emoji_caches = []
 
@@ -63,7 +64,7 @@ class NativeSessions:
             # Persisted vector fingerprints must survive ephemeral grant rotation.
             # A real provider route change still creates a distinct model space.
             provider_name = scope + ':' + task + ':' + context.get('route_identity', 'local')
-            providers.append(APIProvider(name=provider_name, base_url=context['gateway'] + '/native/model/' + task, api_key=context['token'], client_type='openai', max_retry=1, timeout=90))
+            providers.append(APIProvider(name=provider_name, base_url=context['gateway'] + '/native/model/' + task, api_key=context['token'], client_type='openai', max_retry=1, timeout=180))
             models.append(ModelInfo(name=task, model_identifier=binding.get('model', 'unavailable'), api_provider=provider_name, model_type=task if task in {'embedding', 'image_embedding'} else 'llm', visual=binding.get('visual', task == 'vlm'), extra_params={key: binding[key] for key in ('image_embedding_input', 'image_embedding_body') if key in binding}))
         old = self.contexts.get(scope)
         if old is not None and old.get('token') != context['token']:
@@ -77,16 +78,9 @@ class NativeSessions:
     def scope_for_session(self, session_id):
         from src.chat.message_receive.chat_manager import chat_manager
         session = chat_manager.sessions.get(session_id)
-        if session is None:
-            # Media processing may precede the first ChatManager registration.
-            # Only accept the real native hash for the already bound ingress.
-            scope = current_scope.get()
-            if scope in self.contexts:
-                from src.common.utils.utils_session import SessionUtils
-                kind, owner = scope.split(':')
-                expected = SessionUtils.calculate_session_id('qq', user_id=owner, group_id=owner if kind == 'group' else None, account_id=self.contexts[scope]['account'], scope=scope)
-                if session_id == expected:
-                    return scope
+        mapped = self.session_scopes.get(session_id)
+        if mapped in self.contexts:
+            return mapped
         if session is None or session.scope not in self.contexts:
             raise PermissionError('native session has no authorized scope')
         return session.scope
@@ -117,6 +111,19 @@ class NativeSessions:
         from jmbot.native_storage import install as install_storage
         install_storage(self)
         self.install_memory()
+        from src.chat.message_receive.chat_manager import chat_manager
+        original_register_message = chat_manager.register_message
+        def register_message(message):
+            result = original_register_message(message)
+            scope = getattr(message, 'scope', None)
+            if not scope or scope not in self.contexts:
+                from src.platform_io.route_key_factory import RouteKeyFactory
+                scope = RouteKeyFactory.from_session_message(message).scope
+            if scope not in self.contexts:
+                raise PermissionError('message registered outside native scope')
+            self.session_scopes[message.session_id] = scope
+            return result
+        chat_manager.register_message = register_message
         from src.maisaka.runtime import MaisakaHeartFlowChatting
         from src.maisaka.reasoning_engine import MaisakaReasoningEngine
         def wrap_method(owner, name, session):
@@ -193,6 +200,7 @@ class NativeSessions:
             from src.chat.message_receive.chat_manager import chat_manager
             chat_manager.sessions.pop(session_id, None)
             chat_manager.last_messages.pop(session_id, None)
+            self.session_scopes.pop(session_id, None)
             for cache in (self.contexts, self.configs, self.models):
                 cache.pop(scope, None)
         async def release(session_id, *, reason):
