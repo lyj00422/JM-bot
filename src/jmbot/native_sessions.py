@@ -132,6 +132,13 @@ class NativeSessions:
             raise PermissionError('missing native session context')
         return self.contexts[scope]
 
+    def runtime_kernel_for_webui(self, get_kernel):
+        # WebUI requests have no chat ContextVar. Expose only the currently
+        # leased, registered scope's kernel; never fall back to another scope.
+        if self.memory.scope not in self.contexts or self.memory.host is None:
+            return None
+        return get_kernel()
+
     def install(self):
         from src.config.config import global_config, model_config, config_manager
         # _ConfigProxy retains this getter, including in already imported modules.
@@ -388,4 +395,4 @@ class NativeSessions:
         host_service.a_memorix_host_service = MemoryHost()
         self.memory = host_service.a_memorix_host_service
         kernel = runtime_registry.get_runtime_kernel
-        runtime_registry.get_runtime_kernel = lambda: kernel() if current_scope.get() == self.memory.scope else None
+        runtime_registry.get_runtime_kernel = lambda: self.runtime_kernel_for_webui(kernel)
