@@ -38,7 +38,7 @@ class ModelRoutes:
         providers = document.get('providers') if isinstance(document, dict) else None
         if not isinstance(providers, dict) or len(providers) > 8:
             raise ValueError('invalid provider configuration')
-        allowed = {family + '_' + origin for family in ('ds', 'glm', 'kimi', 'qwen') for origin in ('school', 'official')}
+        allowed = {family + '_' + origin for family in ('ds', 'glm', 'kimi', 'qwen') for origin in ('school', 'official')} | {'siliconflow'}
         for provider, route in providers.items():
             if provider not in allowed or not isinstance(route, dict) or set(route) - {'base_url', 'tasks'}:
                 raise ValueError('unknown provider or route field')
@@ -49,8 +49,10 @@ class ModelRoutes:
             if not isinstance(tasks, dict) or set(tasks) - set(TASKS):
                 raise ValueError('invalid task bindings')
             for name, binding in tasks.items():
-                if not isinstance(binding, dict) or set(binding) - {'model', 'enabled', 'concurrency', 'dimension', 'visual', 'tools', 'image_embedding_input', 'image_embedding_body'}:
+                if not isinstance(binding, dict) or set(binding) - {'model', 'enabled', 'concurrency', 'dimension', 'visual', 'tools', 'provider', 'image_embedding_input', 'image_embedding_body'}:
                     raise ValueError('invalid task configuration')
+                if binding.get('provider') is not None and binding['provider'] not in allowed:
+                    raise ValueError('unknown task provider')
                 for capability in ('visual', 'tools'):
                     if capability in binding and type(binding[capability]) is not bool:
                         raise ValueError('model capabilities must be boolean')
@@ -73,6 +75,9 @@ class ModelRoutes:
                     raise ValueError('image embedding template exceeds limit')
                 if name == 'voice' and binding.get('enabled', True):
                     raise ValueError('voice transport is unavailable; keep this task disabled')
-            for required in ('planner', 'replyer', 'utils'):
-                if not tasks.get(required, {}).get('model') or not tasks.get(required, {}).get('enabled', True):
-                    raise ValueError('planner, replyer and utils are required')
+            if provider != 'siliconflow':
+                for required in ('planner', 'replyer', 'utils'):
+                    if not tasks.get(required, {}).get('model') or not tasks.get(required, {}).get('enabled', True):
+                        raise ValueError('planner, replyer and utils are required')
+            elif not tasks.get('embedding', {}).get('enabled', False):
+                raise ValueError('SiliconFlow route requires an enabled embedding task')

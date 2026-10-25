@@ -20,7 +20,6 @@ async def run():
     os.environ['MAIBOT_INITIALIZE_ONLY'] = '1'
     from src.config.config import Config, ModelConfig, config_manager, global_config
     from src.config.model_configs import APIProvider, ModelInfo, ModelTaskConfig, TaskConfig
-    from src.config.official_configs import LearningItem
     config = Config()
     from jmbot.native_emoji import collection_limit
     config.emoji.max_reg_num = collection_limit()
@@ -31,19 +30,6 @@ async def run():
     config.bot.qq_account = context['account']
     config.bot.platform = 'qq'
     config.bot.nickname = '大肥鱼'
-    config.personality.personality = '会话外不具有角色、记忆或模型调用权限。'
-    config.personality.behavior_style = os.environ.get('JM_BOT_BEHAVIOR_STYLE') or (
-        '你在群里和私聊里都是个有聊天欲的普通群友：听懂了话题、也有想说的，就主动接一句，不用等别人 @ 你；'
-        '局面冷下来时，可以自己起个话题、分享刚看到的事或问一句。每次只说一两句，别连续自说自话、别刷屏、别硬凑。'
-        '有人认真求助或情绪低落时，先把话接住、认真回应。不编造没发生过的经历，不重复用过的梗。'
-    )
-    timing = config.chat.reply_timing
-    timing.talk_value = float(os.environ.get('JM_BOT_TALK_VALUE', '1'))
-    timing.private_talk_value = float(os.environ.get('JM_BOT_PRIVATE_TALK_VALUE', '1'))
-    timing.message_debounce_mode = os.environ.get('JM_BOT_DEBOUNCE_MODE', 'fast')
-    timing.no_action_backoff_base_seconds = float(os.environ.get('JM_BOT_NO_ACTION_BACKOFF_BASE', '8'))
-    timing.no_action_backoff_cap_seconds = float(os.environ.get('JM_BOT_NO_ACTION_BACKOFF_CAP', '90'))
-    timing.max_consecutive_wait_count = int(os.environ.get('JM_BOT_MAX_CONSECUTIVE_WAIT', '2'))
     config.maim_message.enabled = False
     # The migration plan requires the normal MaiBot management surface to be
     # available.  Keep it loopback-only; the desktop connector forwards it
@@ -58,7 +44,7 @@ async def run():
     config.a_memorix.global_memory_sharing_enabled = False
     config.experimental.focus_mode = False
     config.expression.use_vector_expression = False
-    config.a_memorix.plugin.enabled = False
+    config.a_memorix.plugin.enabled = True
     config.a_memorix.shared_memory_groups = []
     config.chat.max_context_size = 24
     config.chat.max_private_context_size = 24
@@ -66,19 +52,13 @@ async def run():
     config.emoji.use_new_send_logic = context.get('emoji_mode', 'selector') == 'planner'
     if config.emoji.use_new_send_logic and not context['tasks'].get('planner', {}).get('visual', False):
         raise ValueError('planner emoji mode requires a visual planner')
-    kind, owner = context['scope'].split(':')
-    for section in (config.expression, config.jargon):
-        section.learning_list = [LearningItem(platform='qq', item_id=owner, type=kind, use=context['growth_enabled'], learn=False)]
-        # Native automatic writes cannot bypass reviewed growth candidates.
-        if hasattr(section, 'sharing_list'):
-            section.sharing_list = []
     providers, models = [], []
     tasks = ModelTaskConfig()
     # Explicit empty/disabled tasks must not use upstream fallback to utils.
     # Bind every native task to its own gateway; disabled tasks return 409.
     from jmbot.model_routes import TASKS
     bindings = {task: context['tasks'].get(task, {'enabled': False, 'model': 'unavailable'}) for task in TASKS}
-    config.a_memorix.plugin.enabled = False
+    config.a_memorix.plugin.enabled = bool(bindings.get('embedding', {}).get('enabled', False))
     config.a_memorix.embedding.model_name = 'embedding'
     config.a_memorix.embedding.dimension = bindings.get('embedding', {}).get('dimension', 1024)
     config.a_memorix.image_memory.enabled = bool(bindings.get('image_embedding', {}).get('enabled', False))

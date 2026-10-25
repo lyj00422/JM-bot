@@ -31,7 +31,7 @@ from jmbot.core.sticker_import import StickerImportError, StickerImporter
 
 
 SUPER_ADMIN_ID = 3065532050
-RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.20")
+RELEASE_VERSION = os.environ.get("JM_BOT_RELEASE_VERSION", "0.3.21")
 ALLOWED_PROVIDERS = {
     "ds_school", "ds_official", "glm_school", "glm_official",
     "kimi_school", "kimi_official", "qwen_school", "qwen_official",

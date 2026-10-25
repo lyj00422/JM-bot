@@ -78,25 +78,15 @@
       <nav id="nav">
         <button data-page="monitor" class="active">状态</button>
         <button data-page="native">原生管理入口</button>
-        <div class="nav-group"><span>QQ 会话</span>
-          <button data-page="groups">群聊</button>
-          <button data-page="friends">私聊</button>
-          <button data-page="approvals">申请</button>
-        </div>
-        <div class="nav-group"><span>聊天</span>
-          <button data-page="persona">人设与成长</button>
-          <button data-page="stickers">表情包导入</button>
-        </div>
         <div class="nav-group"><span>下载</span>
-          <button data-page="download-perms">会话权限</button>
           <button data-page="download-queue">队列</button>
           <button data-page="download-help">帮助文本</button>
         </div>
         <button id="admin-nav" data-page="admins" hidden>管理员账号</button>
       </nav>
       <main>
-        <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><div class="panel"><h2>全局业务开关</h2><label class="check"><input id="global-chat" type="checkbox">聊天功能</label><label class="check"><input id="global-download" type="checkbox">下载功能</label><button id="save-global" class="primary">保存</button></div><p><button id="refresh-status">刷新状态</button></p></section>
-        <section class="section" id="page-native"><h1>原生管理入口</h1><p class="muted">复制对应的登录 Token，再打开 MaiBot 或 NapCat 原生后台登录。会话权限、人设与成长、表情包导入和下载任务继续在本后台管理。</p><div id="management-links"><p class="muted">正在读取原生服务与登录 Token…</p></div><p><button id="refresh-management">刷新入口与 Token</button></p><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state"></div></div></section>
+        <section class="section active" id="page-monitor"><h1>运行状态</h1><div id="services"></div><p><button id="refresh-status">刷新状态</button></p></section>
+        <section class="section" id="page-native"><h1>原生管理入口</h1><div id="management-links"><p class="muted">正在读取原生服务与登录 Token…</p></div><p><button id="refresh-management">刷新入口与 Token</button></p><div class="panel"><h2>QQ 登录状态</h2><div id="login-qr-state"></div></div></section>
         <section class="section" id="page-groups"><h1>群聊</h1><p class="muted">查看已加入的群并管理群备注。聊天权限和人设在「人设与成长」中设置。</p><div class="panel"><div class="row"><label>搜索<input id="monitor-group-search" placeholder="群号 / 群名 / 备注"></label><button id="refresh-groups">刷新</button></div><div id="monitor-group-list" class="muted">加载中…</div></div></section>
         <section class="section" id="page-friends"><h1>私聊</h1><p class="muted">查看好友并管理备注。聊天权限和人设在「人设与成长」中设置。</p><div class="panel"><div class="row"><label>搜索<input id="monitor-friend-search" placeholder="QQ / 昵称 / 备注"></label><button id="refresh-friends">刷新</button></div><div id="monitor-friend-list" class="muted">加载中…</div></div></section>
         <section class="section" id="page-approvals"><h1>好友与群申请</h1><div class="row"><button data-approval="pending" class="primary">待处理</button><button data-approval="approved">已通过</button><button data-approval="rejected">已拒绝</button></div><div id="approval-list" class="panel"></div></section>
@@ -123,7 +113,7 @@
     }
     function note(text) { $("notice").textContent = text; $("notice").style.display = "block"; setTimeout(() => $("notice").style.display = "none", 2600); }
     function showLogin() { $("login").hidden = false; $("app").hidden = true; $("management-links").replaceChildren(); }
-    async function enterApp() { me = await api("/api/me"); $("identity").textContent = `QQ ${me.qq_id}`; $("admin-nav").hidden = !me.is_super; $("login").hidden = true; $("app").hidden = false; await Promise.all([loadStatus(), loadManagementLinks(), loadApprovals("pending"), loadHelp(), loadDefaultPersona(), loadGlobalPolicy(), loadQr()]); }
+    async function enterApp() { me = await api("/api/me"); $("identity").textContent = `QQ ${me.qq_id}`; $("admin-nav").hidden = !me.is_super; $("login").hidden = true; $("app").hidden = false; await Promise.all([loadStatus(), loadManagementLinks(), loadHelp(), loadQr()]); }
     $("login-form").addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); try { await api("/api/login", { method: "POST", body: JSON.stringify({ qq_id: Number(form.get("qq_id")), password: form.get("password") }) }); await enterApp(); } catch (error) { note(error.message); } });
     $("logout").onclick = async () => { await api("/api/logout", { method: "POST" }); showLogin(); };
     $("nav").addEventListener("click", (event) => {
@@ -134,13 +124,8 @@
       document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${page}`));
       if (page === "admins") loadAdmins();
       if (page === "native") { loadManagementLinks(); loadQr(); }
-      if (page === "persona") loadPersonaScopes();
-      if (page === "download-perms") loadDownloadStatus();
       if (page === "download-queue") loadDownloadQueue();
       if (page === "download-help") loadHelp();
-      if (page === "approvals") loadApprovals("pending");
-      if (page === "groups") loadMonitor("group");
-      if (page === "friends") loadMonitor("private");
     });
     async function loadStatus() { try { const data = await api("/api/status"); $("services").innerHTML = Object.entries(data.services).map(([name, value]) => `<div class="item"><div>${escapeHtml(name)}<small>${escapeHtml(value.detail || "")}</small></div><span class="status ${value.healthy ? "ok" : "bad"}">${value.healthy ? "在线" : "离线"}</span></div>`).join("") || "<p class='muted'>暂无服务心跳</p>"; } catch (error) { note(error.message); } }
     async function copyLoginToken(input) {

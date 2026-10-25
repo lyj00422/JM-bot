@@ -4,5 +4,5 @@
   "nonebot": {"package": "nonebot2", "version": "2.5.0", "research_commit": "6e1efbea0e0341b461c5ace5ecc794e302b3eac6"},
   "onebot": {"package": "nonebot-adapter-onebot", "version": "2.4.6"},
   "adapter": {"implementation": "plugins/maibot-team.snowluma-adapter + src/jmbot/native_worker.py", "revision": "MaiBot-SnowLuma-Adapter@54fcc7fcc4072983a1283d99fa0edd559125e1d7", "version": "1.1.8", "official_connector_available": true, "official_connector_used": false, "production_transport": "legacy_split_until_napcat_forward_ws_validation"},
-  "scope_policy_plugin": {"path": "plugins/jmbot-scope-policy", "version": "0.1.0", "host_commit": "c602a2780f4f4dda4a6be46d67abc1cfb1ad420c", "production_enabled": true}
+  "memory": {"owner": "MaiBot A_Memorix", "embedding_provider": "SiliconFlow"}
 }

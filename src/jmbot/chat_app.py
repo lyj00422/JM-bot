@@ -89,6 +89,14 @@ def create_chat_app():
             provider = 'ds_school'
         return credentials.get_default_credential(provider) or os.environ.get('JM_BOT_CHAT_DEFAULT_API_KEY', ''), provider
 
+    def resolve_provider(provider):
+        key = credentials.get_default_credential(provider)
+        if not key:
+            key = os.environ.get('JM_BOT_MODEL_KEY_' + provider.upper(), '')
+        if not key and provider.endswith('_school'):
+            key = os.environ.get('JM_BOT_CHAT_DEFAULT_API_KEY', '')
+        return key
+
     def routes(provider):
         # Explicit task capabilities; never infer vision/embedding from model names.
         document = model_routes.read()['document']
@@ -97,39 +105,6 @@ def create_chat_app():
         if not value or not value.get('base_url', '').startswith('https://'):
             raise ValueError('provider route missing or invalid')
         return value
-
-    async def generate_growth(scope, prompt, *, max_tokens=600, require_growth=True):
-        import httpx
-        key, provider = resolve(scope)
-        route = routes(provider)
-        binding = route['tasks'].get('learner', {})
-        if not key or not binding.get('enabled', True) or not binding.get('model'):
-            raise ValueError('growth model unavailable')
-        async def execute():
-            semaphore = provider_limits.setdefault(provider, asyncio.Semaphore(2))
-            task_semaphore = task_limits.setdefault((provider, 'learner', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
-            background = background_limits.setdefault(provider, asyncio.Semaphore(1))
-            async with background, task_semaphore, semaphore:
-                if not state.permitted(scope) or (require_growth and not state.get_policy(scope).growth_enabled):
-                    raise ValueError('growth permission revoked')
-                async with httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
-                    result = await client.post(route['base_url'].rstrip('/') + '/chat/completions',
-                        headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'temperature': 0,
-                        'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': max_tokens})
-                    result.raise_for_status()
-                    if not state.permitted(scope) or resolve(scope) != (key, provider):
-                        raise ValueError('growth permission or credential changed')
-                    return {'content': result.json()['choices'][0]['message']['content'], 'provider': provider, 'model': binding['model']}
-        return await background_scheduler.submit('qq:' + os.environ.get('JM_BOT_QQ_ACCOUNT', '') + ':' + scope, execute, passive=False, timeout=180)
-
-    from jmbot.growth_worker import GrowthWorker
-    from jmbot.persona_refinery import PersonaRefinery
-    refinery = PersonaRefinery(state, generate_growth)
-    growth = GrowthWorker(state, generate_growth, refinery=refinery)
-
-    class PersonaDraft:
-        def generate(self, scope):
-            return asyncio.run_coroutine_threadsafe(refinery.draft(scope), app.state.loop).result(185)
 
     async def send(event, message):
         return await asyncio.to_thread(download.call, 'qq', 'send_configuration', str(event['self_id']), classify(event).scope, message)
@@ -186,8 +161,6 @@ def create_chat_app():
                     grant['priority_until'] = time.monotonic() + 180
                 context['write_barrier'] = str((data / 'policy-write.lock').resolve())
                 await pool.deliver(identity, event, context)
-                if policy.growth_enabled:
-                    await growth.offer(route.scope)
                 failures.pop(identity, None)
             except Exception as exc:
                 # No event payload, credentials or upstream error strings in status.
@@ -250,8 +223,7 @@ def create_chat_app():
         from jmbot.native_control import NativeControl
         mount_rpc(app, token=token, ledger=data / 'rpc.sqlite3', targets={
             'state': state, 'credentials': CredentialView(credentials, barrier, store_lock), 'stickers': stickers,
-            'routes': model_routes, 'draft': app.state.sticker_draft, 'persona_draft': PersonaDraft(), 'native': NativeControl(pool, loop, state), 'ingress': Ingress(loop, inbox)}, allowed={
-            'persona_draft': {'generate'},
+            'routes': model_routes, 'draft': app.state.sticker_draft, 'native': NativeControl(pool, loop, state), 'ingress': Ingress(loop, inbox)}, allowed={
             'draft': {'generate'},
             'routes': {'read', 'write'},
             'state': STATE_METHODS, 'credentials': CREDENTIAL_METHODS,
@@ -259,7 +231,7 @@ def create_chat_app():
             'stickers': {'template_bytes', 'preview_bytes', 'confirm_preview', 'catalog', 'review'}, 'ingress': {'accept'}})
         await scheduler.start()
         await background_scheduler.start()
-        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(growth.run()), asyncio.create_task(growth.maintain()), asyncio.create_task(bootstrap_native_runtime())]
+        workers = [asyncio.create_task(consume()) for _ in range(2)] + [asyncio.create_task(supervise()), asyncio.create_task(bootstrap_native_runtime())]
         try:
             yield
         finally:
@@ -431,10 +403,16 @@ def create_chat_app():
         grant, key = grant_for(request)
         if task not in TASKS or operation not in {'chat/completions', 'embeddings', 'audio/transcriptions'}:
             raise HTTPException(404)
-        route = routes(grant['provider'])
-        binding = route['tasks'].get(task)
+        default_route = routes(grant['provider'])
+        binding = default_route['tasks'].get(task)
         if not binding or not binding.get('enabled', True):
             raise HTTPException(409, 'task capability unavailable')
+        task_provider = binding.get('provider', grant['provider'])
+        route = routes(task_provider)
+        key = resolve_provider(task_provider)
+        if not key:
+            raise HTTPException(409, 'task provider credential unavailable')
+        binding = route['tasks'].get(task, binding)
         expected = 'embeddings' if task in {'embedding', 'image_embedding'} else 'audio/transcriptions' if task == 'voice' else 'chat/completions'
         if operation != expected:
             raise HTTPException(403, 'task operation mismatch')
@@ -497,8 +475,8 @@ def create_chat_app():
             from contextlib import AsyncExitStack
             import logging
             grant_for(request)
-            semaphore = provider_limits.setdefault(grant['provider'], asyncio.Semaphore(2))
-            task_semaphore = task_limits.setdefault((grant['provider'], task, binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
+            semaphore = provider_limits.setdefault(task_provider, asyncio.Semaphore(2))
+            task_semaphore = task_limits.setdefault((task_provider, task, binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
             async with AsyncExitStack() as stack:
                 if background:
                     await stack.enter_async_context(background_limits.setdefault(grant['provider'], asyncio.Semaphore(1)))

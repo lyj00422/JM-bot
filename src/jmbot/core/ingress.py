@@ -40,10 +40,9 @@ def classify(event: dict, prefix: str = '/jm') -> Route:
         return Route('drop')
     scope = f'{kind}:{int(owner)}'
     text = text_of(event).lstrip()
-    # Consume malformed credential commands too: they must never reach a model.
-    if re.match(r'^/(ds|glm|kimi|qwen)', text, re.I):
-        return Route('credential', scope, True)
-    if re.match(r'^/jmg', text, re.I) or re.match(re.escape(prefix) + r'\s+管理(?=\s|$)', text, re.I):
+    if re.match(r'^/jmg(?=\s|$)', text, re.I):
+        return Route('download', scope, True)
+    if re.match(re.escape(prefix) + r'\s+管理(?=\s|$)', text, re.I):
         return Route('drop', scope)
     if re.match(re.escape(prefix) + r'(?=\s|$)', text, re.I):
         return Route('download', scope, True)

@@ -16,6 +16,18 @@ def test_only_explicit_at_is_prioritized(kind, segments, expected):
     assert classify(event).direct is expected
 
 
+@pytest.mark.parametrize(('text', 'domain'), [
+    ('/jm 12345', 'download'),
+    ('/jmg 清空', 'download'),
+    ('/ds key-value', 'chat'),
+    ('普通聊天', 'chat'),
+])
+def test_only_download_commands_are_claimed_by_nonebot(text, domain):
+    event = {'post_type': 'message', 'message_type': 'group', 'self_id': 99, 'user_id': 42,
+             'group_id': 1, 'message': [{'type': 'text', 'data': {'text': text}}]}
+    assert classify(event).domain == domain
+
+
 def test_emoji_provenance_survives_restart_without_group_sharing(tmp_path):
     from PIL import Image
     import io

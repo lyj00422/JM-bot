@@ -10,11 +10,17 @@
         "memory": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
         "mid_memory": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
         "learner": {"model": "REPLACE_WITH_CHAT_MODEL", "enabled": true, "concurrency": 1},
-        "embedding": {"model": "REPLACE_WITH_EMBEDDING_MODEL", "dimension": 1024, "enabled": true, "concurrency": 1},
+        "embedding": {"model": "BAAI/bge-m3", "dimension": 1024, "enabled": true, "provider": "siliconflow", "concurrency": 1},
         "emoji": {"enabled": false},
         "vlm": {"enabled": false},
         "image_embedding": {"enabled": false},
         "voice": {"enabled": false}
+      }
+    },
+    "siliconflow": {
+      "base_url": "https://api.siliconflow.cn/v1",
+      "tasks": {
+        "embedding": {"model": "BAAI/bge-m3", "dimension": 1024, "enabled": true, "concurrency": 1}
       }
     }
   }
