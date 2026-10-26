@@ -56,12 +56,19 @@ class QQRuntimeStateManager:
         """返回当前已就绪连接的作用域。"""
         return self._reported_scope if self._runtime_state_connected else None
 
-    async def report_connected(self, account_id: str, server_config: QQServerConfig) -> bool:
+    async def report_connected(
+        self,
+        account_id: str,
+        server_config: QQServerConfig,
+        *,
+        preserve_scope: bool = False,
+    ) -> bool:
         """向 Host 上报当前消息网关连接已就绪。
 
         Args:
             account_id: 当前 当前连接对应的机器人账号 ID。
             server_config: 当前生效的 对端服务端配置。
+            preserve_scope: 是否仅刷新连接确认而保留当前动态会话作用域。
 
         Returns:
             bool: 若 Host 接受了运行时状态更新，则返回 ``True``。
@@ -72,6 +79,14 @@ class QQRuntimeStateManager:
             return False
 
         scope = server_config.connection_id or None
+        # Heartbeats confirm the existing connection. They must not reset a
+        # conversation scope selected immediately before an inbound message.
+        if (
+            preserve_scope
+            and self._runtime_state_connected
+            and self._reported_account_id == normalized_account_id
+        ):
+            return True
         if (
             self._runtime_state_connected
             and self._reported_account_id == normalized_account_id
@@ -126,3 +141,21 @@ class QQRuntimeStateManager:
             self._runtime_state_connected = False
             self._reported_account_id = None
             self._reported_scope = None
+
+    async def report_message_scope(self, scope: str) -> bool:
+        """Declare the conversation scope before injecting its message."""
+        normalized_scope = str(scope or "").strip()
+        if not self._runtime_state_connected or not self._reported_account_id:
+            return False
+        if self._reported_scope == normalized_scope:
+            return True
+        accepted = await self._gateway_capability.update_state(
+            gateway_name=self._gateway_name,
+            ready=True,
+            platform="qq",
+            account_id=self._reported_account_id,
+            scope=normalized_scope,
+        )
+        if accepted:
+            self._reported_scope = normalized_scope or None
+        return bool(accepted)

@@ -38,8 +38,8 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 project = Path(__file__).resolve().parents[1]
 source = project / '.git/upstream/maibot'
 root = Path(tempfile.mkdtemp(prefix='native-check-', dir=project / '.git'))
-context = {'account': '123456', 'scope': 'group:654321', 'persona': 'local test',
-           'growth_enabled': True, 'gateway': 'http://127.0.0.1:' + str(server.server_port),
+context = {'account': '123456', 'scope': 'group:654321',
+           'gateway': 'http://127.0.0.1:' + str(server.server_port),
            'token': 'local-test-only', 'runtime_token': 'local-runtime-only',
            'tasks': {task: {'model': 'local', 'enabled': True, 'visual': task == 'vlm'}
                      for task in ('planner', 'replyer', 'utils', 'vlm')}}
@@ -59,13 +59,17 @@ async def check():
         return
     from jmbot.native_sessions import NativeSessions
     from src.config.config import config_manager, global_config, model_config
-    peer = {**context, 'scope': 'group:999', 'persona': 'peer persona', 'token': 'peer-token', 'growth_enabled': False}
+    peer = {**context, 'scope': 'group:999', 'token': 'peer-token'}
     sessions.update(peer)
     async def read(scope):
         with sessions.bind(scope):
             await asyncio.sleep(0)
             return global_config.personality.personality, model_config.api_providers[0].api_key
-    assert await asyncio.gather(read(context['scope']), read(peer['scope'])) == [('local test', 'local-test-only'), ('peer persona', 'peer-token')]
+    native_personality, first_key = await read(context['scope'])
+    peer_personality, peer_key = await read(peer['scope'])
+    assert native_personality == peer_personality
+    assert (first_key, peer_key) == ('local-test-only', 'peer-token')
+    assert 'native_prompt_seed' not in context
     assert sessions.configs[context['scope']].a_memorix.storage.data_dir != sessions.configs[peer['scope']].a_memorix.storage.data_dir
     from src.common.database.database import initialize_database, get_db_session
     from src.chat.message_receive.chat_manager import chat_manager
@@ -79,12 +83,12 @@ async def check():
             ids.append(session.session_id)
             with get_db_session() as db:
                 db.connection().exec_driver_sql('CREATE TABLE isolation_test(value TEXT)')
-                db.connection().exec_driver_sql('INSERT INTO isolation_test VALUES(?)', (item['persona'],))
+                db.connection().exec_driver_sql('INSERT INTO isolation_test VALUES(?)', (item['scope'],))
     assert ids[0] != ids[1]
     for item in (context, peer):
         with sessions.bind(item['scope']):
             with get_db_session() as db:
-                assert db.connection().exec_driver_sql('SELECT value FROM isolation_test').scalars().all() == [item['persona']]
+                assert db.connection().exec_driver_sql('SELECT value FROM isolation_test').scalars().all() == [item['scope']]
     from src.emoji_system.emoji_manager import emoji_manager
     from src.prompt.prompt_manager import prompt_manager
     prompt_manager.load_prompts()
@@ -152,7 +156,7 @@ async def check():
     sessions.update(context)
     with sessions.bind(context['scope']):
         with get_db_session() as db:
-            assert db.connection().exec_driver_sql('SELECT value FROM isolation_test').scalars().all() == ['local test']
+            assert db.connection().exec_driver_sql('SELECT value FROM isolation_test').scalars().all() == [context['scope']]
     print('NATIVE_SESSION_CHECK_OK: scope configs/DB, both emoji tools, actual vector kernel switch')
 
 try:

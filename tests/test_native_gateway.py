@@ -10,7 +10,7 @@ from jmbot.core.conversation_state import ConversationStateStore
 from jmbot.service_rpc import sign
 
 
-def test_shared_runtime_grants_isolate_send_and_revoke_one_scope(tmp_path, monkeypatch):
+def test_native_grants_ignore_legacy_chat_policy_and_keep_credential_isolation(tmp_path, monkeypatch):
     from jmbot.chat_app import create_chat_app
     for name, value in {
         'JM_BOT_SERVICE_TOKEN': 't' * 40, 'JM_BOT_QQ_ACCOUNT': '99',
@@ -28,8 +28,8 @@ def test_shared_runtime_grants_isolate_send_and_revoke_one_scope(tmp_path, monke
     (tmp_path / 'routes.json').write_text(json.dumps({'providers': {'ds_school': {'base_url': 'https://provider.test/v1', 'tasks': {name: {'enabled': True, 'model': name} for name in ('planner', 'replyer', 'utils')}}}}))
     app = create_chat_app()
     state = ConversationStateStore(tmp_path / 'state.db')
-    state.set_policy('group:1', chat_enabled=True)
-    state.set_policy('group:2', chat_enabled=True)
+    state.set_policy('group:1', chat_enabled=False, chat_blacklisted=True)
+    state.set_global_enabled('chat', False)
     pool = app.state.native_pool
     captured = {}
     async def deliver(identity, event, context):
@@ -69,7 +69,15 @@ def test_shared_runtime_grants_isolate_send_and_revoke_one_scope(tmp_path, monke
         assert client.post('/native/send', headers=first, json={'request_id': 'test-native-send-1', 'message': [{'type': 'text', 'data': {'text': 'hi'}}]}).status_code == 200
         assert sends[-1][1] == 'group:1'
         state = ConversationStateStore(tmp_path / 'state.db')
-        state.set_policy('group:1', chat_blacklisted=True)
-        assert client.get('/native/status', headers=first).status_code == 403
-        assert client.post('/native/send', headers=first, json={'message': []}).status_code == 403
+        state.set_policy('group:1', chat_enabled=True, chat_blacklisted=False)
+        assert client.get('/native/status', headers=first).status_code == 200
         assert client.get('/native/status', headers=second).status_code == 200
+        runtime_headers = {'Authorization': 'Bearer runtime-token'}
+        for scope in ('group/3', 'private/42'):
+            response = client.get('/native/policy/' + scope, headers=runtime_headers)
+            assert response.status_code == 200, response.text
+            assert response.json()['scope'] == scope.replace('/', ':')
+        assert client.get('/native/policy/group/3').status_code == 403
+        monkeypatch.setenv('JM_BOT_CHAT_DEFAULT_API_KEY', 'rotated-provider-key')
+        assert client.get('/native/status', headers=first).status_code == 403
+        assert client.get('/native/status', headers=second).status_code == 403

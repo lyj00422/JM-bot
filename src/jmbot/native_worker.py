@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import signal
@@ -19,63 +20,37 @@ async def run():
     context = json.loads(Path(os.environ['JM_BOT_NATIVE_CONTEXT']).read_text(encoding='utf-8'))
     os.environ['MAIBOT_INITIALIZE_ONLY'] = '1'
     from src.config.config import Config, ModelConfig, config_manager, global_config
-    from src.config.model_configs import APIProvider, ModelInfo, ModelTaskConfig, TaskConfig
-    config = Config()
-    from jmbot.native_emoji import collection_limit
-    config.emoji.max_reg_num = collection_limit()
-    if 'JM_BOT_EMOJI_MAX_SIZE_MB' in os.environ:
-        config.emoji.max_emoji_size_mb = float(os.environ['JM_BOT_EMOJI_MAX_SIZE_MB'])
-    if 'JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES' in os.environ:
-        config.emoji.check_interval = int(os.environ['JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES'])
-    config.bot.qq_account = context['account']
-    config.bot.platform = 'qq'
-    config.bot.nickname = '大肥鱼'
-    config.maim_message.enabled = False
-    # The migration plan requires the normal MaiBot management surface to be
-    # available.  Keep it loopback-only; the desktop connector forwards it
-    # over SSH alongside the JMbot console.
-    config.webui.enabled = True
-    config.webui.host = ['127.0.0.1']
-    config.webui.port = int(os.environ.get('JM_BOT_NATIVE_WEBUI_PORT', '8001'))
-    config.webui.mode = os.environ.get('JM_BOT_NATIVE_WEBUI_MODE', 'production')
-    config.debug.enable_console_input = False
-    config.telemetry.enable = False
-    config.plugin_runtime.enabled = True
-    config.a_memorix.global_memory_sharing_enabled = False
-    config.experimental.focus_mode = False
-    config.expression.use_vector_expression = False
-    config.a_memorix.plugin.enabled = True
-    config.a_memorix.shared_memory_groups = []
-    config.chat.max_context_size = 24
-    config.chat.max_private_context_size = 24
-    config.emoji.emoji_send_num = 8
-    config.emoji.use_new_send_logic = context.get('emoji_mode', 'selector') == 'planner'
-    if config.emoji.use_new_send_logic and not context['tasks'].get('planner', {}).get('visual', False):
-        raise ValueError('planner emoji mode requires a visual planner')
+    from src.config.model_configs import APIProvider, ModelInfo
+    # Load the instance's native MaiBot configuration first.  This preserves
+    # edits made in the MaiBot WebUI across worker restarts; JMbot only supplies
+    # transport and scope data below.
+    config_manager.initialize()
+    config = config_manager.get_global_config()
     providers, models = [], []
-    tasks = ModelTaskConfig()
+    native_config = config_manager.get_model_config()
+    tasks = copy.deepcopy(native_config.model_task_config)
     # Explicit empty/disabled tasks must not use upstream fallback to utils.
     # Bind every native task to its own gateway; disabled tasks return 409.
     from jmbot.model_routes import TASKS
     bindings = {task: context['tasks'].get(task, {'enabled': False, 'model': 'unavailable'}) for task in TASKS}
-    config.a_memorix.plugin.enabled = bool(bindings.get('embedding', {}).get('enabled', False))
-    config.a_memorix.embedding.model_name = 'embedding'
-    config.a_memorix.embedding.dimension = bindings.get('embedding', {}).get('dimension', 1024)
-    config.a_memorix.image_memory.enabled = bool(bindings.get('image_embedding', {}).get('enabled', False))
+    native_models = {model.name: model for model in native_config.models}
     for task, binding in bindings.items():
         if not hasattr(tasks, task):
             continue
         providers.append(APIProvider(name=task, base_url=context['gateway'] + '/native/model/' + task,
                                      api_key='unscoped-denied', client_type='openai', max_retry=1, timeout=90))
+        native_model = native_models.get(task)
+        extra_params = copy.deepcopy(native_model.extra_params) if native_model is not None else {}
+        for key in ('image_embedding_input', 'image_embedding_body'):
+            if key in binding:
+                extra_params.setdefault(key, binding[key])
         models.append(ModelInfo(name=task, model_identifier=binding.get('model', 'unavailable'), api_provider=task, model_type=task if task in {'embedding', 'image_embedding'} else 'llm',
-                                visual=task == 'vlm', extra_params={key: binding[key] for key in ('image_embedding_input', 'image_embedding_body') if key in binding}))
-        setattr(tasks, task, TaskConfig(model_list=[task] if binding.get('enabled', False) else []))
+                                visual=task == 'vlm', extra_params=extra_params))
+        getattr(tasks, task).model_list = [task] if binding.get('enabled', False) else []
     config_manager.global_config = config
     config_manager.model_config = ModelConfig(models=models, api_providers=providers, model_task_config=tasks)
-    # Native memory and plugin children read these files during initialization.
-    from src.config.config import write_config_to_file, BOT_CONFIG_PATH, MODEL_CONFIG_PATH, CONFIG_VERSION, MODEL_CONFIG_VERSION
-    write_config_to_file(config, BOT_CONFIG_PATH, CONFIG_VERSION)
-    write_config_to_file(config_manager.model_config, MODEL_CONFIG_PATH, MODEL_CONFIG_VERSION, True)
+    # bot_config.toml and model_config.toml are owned by MaiBot WebUI. The
+    # gateway bindings above are runtime-only and must not replace either file.
     # Keep MaiBot's normal configuration/plugin watcher.  The previous
     # wrapper replaced this with a no-op, which made the native WebUI appear
     # to work while every saved setting was silently ignored.
@@ -187,7 +162,9 @@ async def run():
 
     class Driver(PlatformIODriver):
         async def send_message(self, message, route_key, metadata=None):
-            scope = route_key.scope
+            scope = route_key.scope or getattr(message, 'scope', None) or current_scope.get()
+            if not scope:
+                raise RuntimeError('native outbound message has no scope')
             with sessions.bind(scope):
                 return await self.send_scoped(message, route_key, metadata)
         async def send_scoped(self, message, route_key, metadata=None):
@@ -221,6 +198,11 @@ async def run():
     manager = get_platform_io_manager()
     driver = Driver(DriverDescriptor('jmbot-scoped', DriverKind.LOCAL, 'qq', context['account'], None))
     manager.register_driver(driver)
+    # Some MaiBot send paths rebuild the message and retain only the account
+    # route fields. Keep an account-level binding so they cannot fall back to
+    # the disabled legacy maim_message sender; exact scope bindings below still
+    # take precedence when scope metadata is preserved.
+    manager.bind_send_route(RouteBinding(RouteKey('qq', context['account'], None), driver.driver_id, DriverKind.LOCAL))
     manager.bind_send_route(RouteBinding(RouteKey('qq', context['account'], context['scope']), driver.driver_id, DriverKind.LOCAL))
     from src.common.runtime_loop import set_main_loop
     set_main_loop(asyncio.get_running_loop())
@@ -319,8 +301,15 @@ async def run():
                 message = SessionMessage(str(event.get('message_id', 'notice-' + str(event.get('time')))),
                                          datetime.fromtimestamp(event.get('time', datetime.now().timestamp())), 'qq')
                 message.account_id, message.scope = context['account'], scope
-                message.message_info = MessageInfo(UserInfo(str(event['user_id']), sender.get('nickname', str(event['user_id'])), sender.get('card')),
-                                                    GroupInfo(owner, event.get('group_name', '')) if kind == 'group' else None)
+                message.message_info = MessageInfo(
+                    UserInfo(str(event['user_id']), sender.get('nickname', str(event['user_id'])), sender.get('card')),
+                    GroupInfo(owner, event.get('group_name', '')) if kind == 'group' else None,
+                    additional_config={
+                        'platform_io_account_id': context['account'],
+                        'platform_io_scope': scope,
+                        'platform_io_target_user_id': str(event['user_id']),
+                    },
+                )
                 sequence = MessageSequence([])
                 segments = event.get('message', [])
                 if isinstance(segments, str):

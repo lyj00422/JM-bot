@@ -370,13 +370,12 @@ class LoginBody(BaseModel):
 
 
 class PolicyBody(BaseModel):
+    model_config = {"extra": "forbid"}
     expected_version: int | None = None
-    chat_enabled: bool | None = None
     download_enabled: bool | None = None
     use_default_key: bool | None = None
     default_persona: bool | None = None
     growth_enabled: bool | None = None
-    chat_blacklisted: bool | None = None
     download_blacklisted: bool | None = None
 
 
@@ -865,7 +864,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     @app.get("/api/policies/global")
     def get_global_policy(_: int = Depends(require_admin)):
         result = {}
-        for domain in ('chat', 'download'):
+        for domain in ('download',):
             try:
                 result[domain] = state.global_enabled(domain)
             except RuntimeError:
@@ -877,7 +876,7 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
     @app.post('/api/policies/disable-all')
     def disable_all(_: int = Depends(require_admin)):
         outcomes = {}
-        for domain in ('chat', 'download'):
+        for domain in ('download',):
             try:
                 state.set_global_enabled(domain, False)
                 outcomes[domain] = {'desired': False, 'applied': True}
@@ -891,6 +890,8 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
 
     @app.patch("/api/policies/global/{kind}")
     def patch_global_policy(kind: str, body: GlobalPolicyBody, _: int = Depends(require_admin)) -> dict[str, bool]:
+        if kind != 'download':
+            raise HTTPException(status_code=400, detail='Chat access is managed by MaiBot')
         try:
             state.set_global_enabled(kind, body.enabled)
         except ValueError as exc:
@@ -923,16 +924,6 @@ def create_admin_app(*, admin_db: str | Path, conversation_db: str | Path, stick
             policy = state.set_policy(scope, **changes)
             store = getattr(state, 'download', state)
             return {"policy": policy.__dict__, "policy_version": store.policy_version(scope), "applied": True}
-        current = getattr(state, 'chat', state).get_policy(scope)
-        requested_default = changes.get("use_default_key", current.use_default_key)
-        if chat_store is not None:
-            requested_default = (
-                chat_store.uses_default_private_key(owner_id)
-                if kind == "private" else chat_store.uses_default_group_key(owner_id)
-            )
-            if "use_default_key" in changes:
-                requested_default = bool(changes["use_default_key"])
-        requested_chat = changes.get("chat_enabled", current.chat_enabled)
         try:
             policy = state.set_policy(scope, expected_version=expected_version, **changes)
             if chat_store is not None and "use_default_key" in changes:

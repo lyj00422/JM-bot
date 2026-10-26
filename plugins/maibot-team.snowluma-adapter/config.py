@@ -630,6 +630,16 @@ class QQFilterConfig(PluginConfigBase):
     __ui_label__: ClassVar[str] = "消息过滤"
     __ui_order__: ClassVar[int] = 3
 
+    ignored_command_prefixes: List[str] = Field(
+        default_factory=list,
+        description="在入站解析前忽略以这些前缀开头的命令。",
+        json_schema_extra={
+            "label": "忽略命令前缀",
+            "hint": "匹配的命令不会进入 MaiBot；前缀后须为消息结尾或空白，避免误拦截相似正文。",
+            "order": 0,
+        },
+    )
+
     ban_user_id: List[str] = Field(
         default_factory=list,
         description="用户黑名单，拦截指定 QQ 用户的群聊和私聊消息。",
@@ -713,6 +723,11 @@ class QQFilterConfig(PluginConfigBase):
             if user_id not in user_ids:
                 user_ids.append(user_id)
         return user_ids
+
+    @field_validator("ignored_command_prefixes", mode="before")
+    @classmethod
+    def _normalize_ignored_command_prefixes(cls, value: Any) -> List[str]:
+        return _normalize_string_list(value)
 
     @field_validator("regex_filter_mode", mode="before")
     @classmethod

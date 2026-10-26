@@ -32,24 +32,31 @@ multiple_probability = 0
 
 正常原生部署中，WebUI 与直接编辑文件修改的是同一套配置，多数人设设置可热重载。身份与性格、行动准则、表达方式分开设置；活跃度另由 chat.reply_timing 管理。锁定源码中，src/maisaka/chat_loop_service.py 读取 personality 和 behavior_style，src/chat/replyer/maisaka_generator_base.py 读取 personality 和 reply_style。
 
-## 当前线上为什么不是原生 WebUI 管理
+## 迁移后的数据流
 
-当前线上 worker 将 config.webui.enabled 设为 False，并将 config_manager.start_file_watcher 替换为空操作。本次检查没有 8001 监听，8081 是 JMbot 自己的管理后台。
-
-有效人设的数据流是：
+JMbot 仍保留原有会话人设、成长和版本数据，不删除历史记录。切换到原生聊天前，管理员离线运行 `scripts/migrate_persona_to_maibot.py`，把三字段转换为该聊天流的原生 `chat.reply_style.chat_prompts` 条目，保存到实例自己的 `config/bot_config.toml`：
 
 ```text
 JMbot 默认/会话基础人设 + 已启用的成长摘要和新条目
-    → ConversationStateStore.effective_persona(scope)
-    → 聊天协调器 context['persona']
-    → NativeSessions.update()
-    → config.personality.personality
-    → MaiBot 原生推理与回复
+    → 一次性离线迁移脚本
+    → MaiBot 原生 chat.reply_style.chat_prompts
+    → MaiBot 官方 ChatConfigUtils
+    → Planner / Replyer
 ```
 
-昵称目前由 native_worker 写为“大肥鱼”。行为风格由 JM_BOT_BEHAVIOR_STYLE 或接入代码的默认提示设置；该默认提示鼓励自然接话和适当发起话题。表达风格由原生 Config 默认值起步，当前会话人设注入没有独立设置 reply_style。后台的人设文本如果包含行为和表达要求，仍会被作为 personality 的整体内容送入模型。
+服务器切换前先停止聊天 worker，再执行一次（路径按实际实例调整）：
 
-所以，仅打开原生 WebUI 或手改生成的 bot_config.toml，并不能让它成为当前会话人设的权威来源：worker 启动会重建配置，会话更新又会从 JMbot 状态注入 personality。要改用原生 WebUI，需先明确人设唯一来源、各会话是否保留不同人设、成长如何处理，并移除或重接冲突的注入逻辑。不能只打开端口后同时保留两套写入入口。
+```bash
+/opt/MaiBot/.venv/bin/python /opt/jmbot/scripts/migrate_persona_to_maibot.py \
+  --db /opt/jmbot/data/conversation.sqlite3 \
+  --config /opt/jmbot-split-data/data/chat-service/instances/qq_2661195769_runtime/config/bot_config.toml
+```
+
+脚本默认创建带 UTC 时间戳的 `.bak.*` 备份；可以先加 `--dry-run` 查看将要添加的 scope。
+
+MaiBot WebUI 的“聊天 → 聊天流 prompt/额外 Prompt”现在是聊天运行时的唯一配置入口。迁移脚本保留已有原生条目，不覆盖 WebUI 已配置的内容；迁移完成后不会再次自动执行。JMbot 后台的人设表仍作为历史数据和迁移备份保留，聊天运行时不读取、写入或注入这些字段，也不通过 Hook 插入 `SystemMessageItem`。
+
+worker 启动先读取实例现有的原生配置，再只补充 QQ 传输和模型网关所需字段，因此重启不会覆盖 WebUI 修改的人格、行为风格、回复风格、活跃度或额外 Prompt。
 
 ## 来源
 

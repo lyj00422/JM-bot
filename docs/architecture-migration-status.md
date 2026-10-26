@@ -1,8 +1,8 @@
 # 架构拆分实施状态
 
-2026-10-25：完成第二轮按执行计划的代码对齐。联合控制台现在展示真实的 MaiBot/NapCat 原生入口，并提供每个群/私聊的三字段人设、A/B/imported 起点快照、版本冲突保护和显式 rebase；MaiBot worker 恢复 WebUI、插件 runtime 和配置 watcher，实例会携带官方 SnowLuma adapter 与 `jmbot-scope-policy` 正式插件；服务级学校凭据成为聊天路由，旧按会话 Key 命令退役。服务器当前仍运行旧 split 链，待发布包验证后再重启，不能把本地代码状态当作线上完成。
+2026-10-26：JMbot 的会话人设、成长和版本数据继续保留，但不再作为第二套聊天配置运行。切换前由 `scripts/migrate_persona_to_maibot.py` 一次性离线写入 MaiBot 原生 `chat.reply_style.chat_prompts`；之后以 MaiBot WebUI 为唯一聊天配置入口。worker 启动先读取现有原生配置，保留 WebUI 对人格、行为、回复风格、活跃度和额外 Prompt 的修改，运行时不再读取或注入 JMbot 人设。
 
-入口采用现有 NapCat 单一反向 WebSocket + SplitAdapter，不使用官方统一 QQ connector。实际调用锁定 MaiBot 的原生 MainSystem、Planner、reply gate、消息接收、PlatformIO 和 A_Memorix。每个账号使用一个原生进程，各群/私聊通过会话上下文隔离配置、人设、数据库、表情缓存和后台任务；向量内核按会话串行切换。前台模型队列有 2 个 worker，后台模型队列有 1 个 worker；原先“每群独立进程”和“全局仅一个模型请求”的说明已过时。
+入口采用现有 NapCat 单一反向 WebSocket + SplitAdapter，不使用官方统一 QQ connector。实际调用锁定 MaiBot 的原生 MainSystem、Planner、reply gate、消息接收、PlatformIO 和 A_Memorix。每个账号使用一个原生进程，各群/私聊通过会话上下文隔离授权、数据库、表情缓存和后台任务；聊天人设由 MaiBot 原生配置中的对应额外 Prompt 选择。向量内核按会话串行切换。前台模型队列有 2 个 worker，后台模型队列有 1 个 worker；原先“每群独立进程”和“全局仅一个模型请求”的说明已过时。
 
 后台包含身份/session/CSRF、审批与结果恢复、域独立策略与持久 desired/applied、任务模型与加密凭据、原生实例与事实记忆管理、人设成长版本/证据/冻结/回退、表情预览/草案/审核/作用域/事务 ID、下载队列和帮助版本，以及备份/哈希核验/恢复/dry-run/可续跑迁移/回滚保全。QQ /jmg 不进入运行链。
 
@@ -12,6 +12,6 @@
 
 历史本地验证记录（2026-10-24，同步线上代码之前）：拆分 RPC/入口/策略恢复/凭据确认/审批恢复/迁移、表情导入、后台、会话状态、下载队列、公平调度及既有解析/凭据兼容共 105 项测试、40 个子测试通过；Python 编译、后台 JavaScript 语法与 Git 差异检查通过。使用锁定上游及其 Python 3.12 依赖，在临时数据根目录、回环模拟模型网关下完成 MainSystem、A_Memorix 和插件子进程初始化及关闭；该检查不调用真实模型、不连接 QQ，不能替代服务器端到端验收，也不是本次同步后的测试结果。
 
-MaiBot 原生 WebUI 与当前人设来源见 [maibot-persona.md](maibot-persona.md)。新代码通过每实例 8001 回环 WebUI、正常 watcher 和插件 runtime 提供原生管理面；会话状态额外携带三字段人设 seed 元数据，仍需 P0 请求捕获证明 Planner/Replyer 全路径隔离。
+MaiBot 原生 WebUI 与人设迁移见 [maibot-persona.md](maibot-persona.md)。新代码通过每实例 8001 回环 WebUI、正常 watcher 和插件 runtime 提供原生管理面；JMbot 不再注册人设 Hook 或向模型请求发送人设版本头。
 
-P0 作用域 spike 见 [native-scope-spike.md](native-scope-spike.md)。截至 2026-10-25，正式插件已提供入站/发送前可拒绝 Hook，并在 Planner/Replyer 注入三字段人设；服务器尚未完成重启后的真实 prompt 捕获、并发隔离和 connector 验证。官方 SnowLuma adapter 已锁定并随 release 提供，但服务器 NapCat 仍未改为正向 WS，生产 connector 仍关闭；当前 split 链保留为回滚运行链。
+P0 作用域 spike 见 [native-scope-spike.md](native-scope-spike.md)。入站/发送前策略检查仍保留；人设由 MaiBot 原生配置管理，不再使用独立的人设 Hook。服务器仍需在发布后验证 WebUI 修改、原生 Prompt 捕获、并发隔离和 connector 链路。

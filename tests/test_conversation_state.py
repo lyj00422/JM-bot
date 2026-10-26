@@ -26,7 +26,7 @@ class ConversationStateTest(unittest.TestCase):
 
     def test_policy_requires_default_persona_or_growth(self):
         group = Scope("group", 1)
-        self.assertFalse(self.store.get_policy(group).chat_enabled)
+        self.assertTrue(self.store.get_policy(group).chat_enabled)
         self.assertFalse(self.store.get_policy(group).download_enabled)
         with self.assertRaisesRegex(ValueError, "cannot both be disabled"):
             self.store.set_policy(group, default_persona=False)
@@ -149,6 +149,18 @@ class ConversationStateTest(unittest.TestCase):
         policy = self.store.get_policy(scope)
         self.assertTrue(policy.chat_blacklisted)
         self.assertTrue(policy.download_blacklisted)
+
+    def test_legacy_chat_restrictions_do_not_gate_chat_or_enable_downloads(self):
+        scope = Scope('group', 123)
+        self.store.set_policy(scope, chat_enabled=False, chat_blacklisted=True)
+        self.store.set_global_enabled('chat', False)
+        self.assertTrue(self.store.permitted(scope))
+        self.assertTrue(self.store.permitted('private:456'))
+        self.assertFalse(self.store.permitted(scope, 'download'))
+        self.store.set_policy(scope, download_enabled=True)
+        self.assertTrue(self.store.permitted(scope, 'download'))
+        self.store.set_policy(scope, download_blacklisted=True)
+        self.assertFalse(self.store.permitted(scope, 'download'))
 
     def test_native_persona_fields_keep_seed_snapshot_until_explicit_rebase(self):
         scope = Scope("group", 101)

@@ -1,13 +1,73 @@
 import asyncio
 import hashlib
 import json
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from jmbot.core.conversation_state import ConversationStateStore
 from jmbot.native_pool import NativePool
+from jmbot.native_sessions import NativeSessions
+
+
+@pytest.fixture
+def native_settings(monkeypatch):
+    # Only the upstream configuration constructors are needed by update().
+    module = ModuleType('src.config.model_configs')
+    module.APIProvider = module.ModelInfo = SimpleNamespace
+    module.TaskConfig = lambda **kw: SimpleNamespace(max_tokens=4096, temperature=0.7, **kw)
+    module.ModelTaskConfig = lambda: SimpleNamespace(emoji=module.TaskConfig(model_list=[]))
+    monkeypatch.setitem(sys.modules, 'src.config.model_configs', module)
+    config_module = ModuleType('src.config.config')
+    config_module.ModelConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, 'src.config.config', config_module)
+    config = SimpleNamespace(a_memorix=SimpleNamespace(storage=SimpleNamespace(data_dir=''),
+                                                      embedding=SimpleNamespace(dimension=1024)))
+    task = SimpleNamespace(model_list=['saved-model'], max_tokens=16384, temperature=0.6,
+                           selection_strategy='round_robin', hard_timeout=240.0)
+    models = SimpleNamespace(model_task_config=SimpleNamespace(emoji=task),
+                             models=[SimpleNamespace(name='emoji', extra_params={'reasoning_effort': 'high'})])
+    return config, models
+
+
+def test_scope_transport_keeps_native_task_settings(native_settings):
+    config, models = native_settings
+    sessions = NativeSessions(config, models, {})
+    context = {'scope': 'group:1', 'gateway': 'http://local', 'token': 'grant', 'tasks': {}}
+    sessions.update(context)
+    scoped = sessions.models['group:1']
+    task = scoped.model_task_config.emoji
+    assert task.max_tokens == 16384
+    assert task.temperature == 0.6
+    assert task.hard_timeout == 240.0
+    assert task.selection_strategy == 'round_robin'
+    assert task.model_list == ['emoji']  # Disabled tasks still reach the rejecting gateway.
+    assert models.model_task_config.emoji.model_list == ['saved-model']
+    assert scoped.models[0].extra_params == {'reasoning_effort': 'high'}
+    task.max_tokens = 8192
+    scoped.models[0].extra_params['reasoning_effort'] = 'medium'
+    assert models.model_task_config.emoji.max_tokens == 16384
+    assert models.models[0].extra_params == {'reasoning_effort': 'high'}
+
+
+@pytest.mark.parametrize('changed', [{'model'}, {'bot', 'model'}])
+def test_native_model_reload_rebuilds_existing_scopes_from_new_settings(native_settings, changed):
+    config, models = native_settings
+    sessions = NativeSessions(config, models, {})
+    for scope in ('group:1', 'private:2'):
+        sessions.update({'scope': scope, 'gateway': 'http://local', 'token': 'grant', 'tasks': {}})
+    import copy
+    updated = copy.deepcopy(models)
+    updated.model_task_config.emoji.max_tokens = 8192
+    updated.models[0].extra_params = {'reasoning_effort': 'medium'}
+    sessions._config_manager_getter = lambda: config
+    sessions._config_manager_model_getter = lambda: updated
+    sessions._on_native_config_reload(changed)
+    for scoped in sessions.models.values():
+        assert scoped.model_task_config.emoji.max_tokens == 8192
+        assert scoped.models[0].extra_params == {'reasoning_effort': 'medium'}
 
 
 def test_growth_refresh_keeps_authorization_but_rejects_stale_candidate(tmp_path):

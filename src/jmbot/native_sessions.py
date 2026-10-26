@@ -14,6 +14,8 @@ import functools
 import json
 import os
 import threading
+import urllib.error
+import urllib.request
 
 
 current_scope = ContextVar('jmbot_native_scope', default=None)
@@ -34,6 +36,8 @@ class NativeSessions:
         # hash or exposing another session database.
         self.session_map_path = Path(os.environ.get('MAIBOT_INSTANCE_DIR', Path.cwd())) / 'scope-sessions.json'
         self._session_map_lock = threading.RLock()
+        self._config_manager_getter = None
+        self._config_manager_model_getter = None
 
     def _persist_session_scope(self, session_id, scope):
         if not session_id or scope not in self.contexts:
@@ -52,44 +56,34 @@ class NativeSessions:
             os.replace(temporary, self.session_map_path)
 
     def update(self, context):
-        from src.config.official_configs import LearningItem
-        from src.config.model_configs import APIProvider, ModelInfo, ModelTaskConfig, TaskConfig
+        from src.config.model_configs import APIProvider, ModelInfo
         from src.config.config import ModelConfig
         scope = context['scope']
         config = copy.deepcopy(self.base_config)
-        # The upstream default Focus scope may merge all chats into one planner.
-        # Independent native session loops are required for group isolation.
-        config.experimental.focus_mode = False
-        config.capabilities.planner_subagent = True
-        config.capabilities.advanced_sub_agent = True
-        config.expression.use_vector_expression = False
-        config.emoji.use_new_send_logic = context.get('emoji_mode', 'selector') == 'planner'
-        if config.emoji.use_new_send_logic and not all(context['tasks'].get('planner', {}).get(flag, False) for flag in ('visual', 'tools')):
-            raise ValueError('planner emoji mode requires visual and tools capabilities')
-        kind, owner = scope.split(':')
-        for section in (config.expression, config.jargon):
-            section.learning_list = [LearningItem(platform='qq', item_id=owner, type=kind, use=context['growth_enabled'], learn=context['growth_enabled'])]
-        config.expression.expression_groups = []
-        config.jargon.jargon_groups = []
-        # Native expression SQL retrieval is session-scoped. Its singleton
-        # vector index is deliberately unused; A_Memorix owns scoped vectors.
-        config.a_memorix.plugin.enabled = all(context['tasks'].get(name, {}).get('enabled', False) for name in ('embedding', 'memory'))
+        # Expression, jargon, personality, reply style and learning rules are
+        # all owned by MaiBot's native config/WebUI. Only storage paths and
+        # model transport are scoped here for account isolation.
         config.a_memorix.storage.data_dir = str((Path.cwd() / 'sessions' / scope.replace(':', '_') / 'data').resolve())
         config.a_memorix.embedding.dimension = context['tasks'].get('embedding', {}).get('dimension', 1024)
-        config.a_memorix.image_memory.enabled = config.a_memorix.plugin.enabled and bool(context['tasks'].get('image_embedding', {}).get('enabled'))
-        tasks, providers, models = ModelTaskConfig(), [], []
+        tasks = copy.deepcopy(self.base_models.model_task_config)
+        providers, models = [], []
         from jmbot.model_routes import TASKS
         for task in TASKS:
             binding = context['tasks'].get(task, {'enabled': False, 'model': 'unavailable'})
             if not hasattr(tasks, task):
                 continue
             # Route disabled tasks to a rejecting gateway, avoiding utils fallback.
-            setattr(tasks, task, TaskConfig(model_list=[task]))
+            getattr(tasks, task).model_list = [task]
             # Persisted vector fingerprints must survive ephemeral grant rotation.
             # A real provider route change still creates a distinct model space.
             provider_name = scope + ':' + task + ':' + context.get('route_identity', 'local')
             providers.append(APIProvider(name=provider_name, base_url=context['gateway'] + '/native/model/' + task, api_key=context['token'], client_type='openai', max_retry=1, timeout=180))
-            models.append(ModelInfo(name=task, model_identifier=binding.get('model', 'unavailable'), api_provider=provider_name, model_type=task if task in {'embedding', 'image_embedding'} else 'llm', visual=binding.get('visual', task == 'vlm'), extra_params={key: binding[key] for key in ('image_embedding_input', 'image_embedding_body') if key in binding}))
+            native_model = next((model for model in self.base_models.models if model.name == task), None)
+            extra_params = copy.deepcopy(native_model.extra_params) if native_model is not None else {}
+            for key in ('image_embedding_input', 'image_embedding_body'):
+                if key in binding:
+                    extra_params.setdefault(key, binding[key])
+            models.append(ModelInfo(name=task, model_identifier=binding.get('model', 'unavailable'), api_provider=provider_name, model_type=task if task in {'embedding', 'image_embedding'} else 'llm', visual=binding.get('visual', task == 'vlm'), extra_params=extra_params))
         old = self.contexts.get(scope)
         if old is not None and old.get('token') != context['token']:
             from src.llm_models.model_client.base_client import client_registry
@@ -98,6 +92,25 @@ class NativeSessions:
                     client_registry.client_instance_cache.pop(key, None)
         self.contexts[scope], self.configs[scope] = context, config
         self.models[scope] = ModelConfig(models=models, api_providers=providers, model_task_config=tasks)
+
+    def _ensure_scope_context(self, scope):
+        """Fetch a grant-backed context when the official adapter opens a new scope."""
+        if scope in self.contexts:
+            return
+        kind, owner = str(scope).split(":", 1)
+        base = self.runtime
+        request = urllib.request.Request(
+            str(base["gateway"]).rstrip("/") + f"/native/policy/{kind}/{owner}",
+            headers={"Authorization": "Bearer " + str(base["runtime_token"])},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                context = json.loads(response.read().decode("utf-8"))
+        except (OSError, ValueError, urllib.error.HTTPError) as exc:
+            raise PermissionError("native scope context unavailable") from exc
+        if not isinstance(context, dict) or context.get("scope") != scope:
+            raise PermissionError("native scope context invalid")
+        self.update(context)
 
     def scope_for_session(self, session_id):
         from src.chat.message_receive.chat_manager import chat_manager
@@ -141,22 +154,27 @@ class NativeSessions:
 
     def install(self):
         from src.config.config import global_config, model_config, config_manager
+        self._config_manager_getter = config_manager.get_global_config
+        self._config_manager_model_getter = config_manager.get_model_config
         # _ConfigProxy retains this getter, including in already imported modules.
         object.__setattr__(global_config, '_getter', lambda: self.configs.get(current_scope.get(), self.base_config))
         object.__setattr__(model_config, '_getter', lambda: self.models.get(current_scope.get(), self.base_models))
         config_manager.get_global_config = lambda: self.configs.get(current_scope.get(), self.base_config)
         config_manager.get_model_config = lambda: self.models.get(current_scope.get(), self.base_models)
+        config_manager.register_reload_callback(self._on_native_config_reload)
         from jmbot.native_storage import install as install_storage
         install_storage(self)
         self.install_memory()
         from src.chat.message_receive.chat_manager import chat_manager
         original_register_message = chat_manager.register_message
         def register_message(message):
-            result = original_register_message(message)
             scope = getattr(message, 'scope', None)
             if not scope or scope not in self.contexts:
                 from src.platform_io.route_key_factory import RouteKeyFactory
                 scope = RouteKeyFactory.from_session_message(message).scope
+            if scope not in self.contexts:
+                self._ensure_scope_context(scope)
+            result = original_register_message(message)
             if scope not in self.contexts:
                 raise PermissionError('message registered outside native scope')
             self.session_scopes[message.session_id] = scope
@@ -198,6 +216,16 @@ class NativeSessions:
         self.install_session_budget()
         from src.maisaka import subagent_tasks
         subagent_tasks.SUBAGENT_MAX_RUNNING_TASKS = 1
+
+    def _on_native_config_reload(self, changed_scopes=None):
+        """Keep scoped config copies aligned with MaiBot WebUI hot reloads."""
+        scopes = set(changed_scopes or ('bot', 'model'))
+        if 'bot' in scopes and self._config_manager_getter is not None:
+            self.base_config = self._config_manager_getter()
+        if 'model' in scopes and self._config_manager_model_getter is not None:
+            self.base_models = self._config_manager_model_getter()
+        for context in list(self.contexts.values()):
+            self.update(context)
 
     @staticmethod
     def idle(chat):

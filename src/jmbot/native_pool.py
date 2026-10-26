@@ -22,6 +22,7 @@ class NativePool:
         self.lock = asyncio.Lock()
         self.errors = {}
         self.scopes = {}
+        self.context_templates = {}
 
     def runtime_identity(self, identity):
         return ':'.join(identity.split(':')[:2]) + ':runtime'
@@ -58,8 +59,17 @@ class NativePool:
             return
         target = directory / 'plugins'
         target.mkdir(parents=True, exist_ok=True)
+        # Older releases copied a JMbot scope-policy plugin into each native
+        # instance. It injected a second persona system message and would
+        # survive a normal dirs_exist_ok copy even after the source plugin was
+        # removed. Delete that retired plugin before loading native plugins.
+        retired_scope_policy = target / 'jmbot-scope-policy'
+        if retired_scope_policy.exists():
+            shutil.rmtree(retired_scope_policy)
         for plugin in source.iterdir():
             if not plugin.is_dir() or plugin.name.startswith('.'):
+                continue
+            if plugin.name == 'jmbot-scope-policy':
                 continue
             destination = target / plugin.name
             config = destination / 'config.toml'
@@ -72,8 +82,13 @@ class NativePool:
         if adapter.is_dir() and not config.exists():
             enabled = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_ENABLED', '').lower() in {'1', 'true', 'yes', 'on'}
             server = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_SERVER', '127.0.0.1')
-            port = int(os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_PORT', '8090'))
+            port = int(os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_PORT', '3001'))
             token = os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_TOKEN', '')
+            ignored_prefixes = [
+                value.strip()
+                for value in os.environ.get('JM_BOT_OFFICIAL_CONNECTOR_IGNORE_PREFIXES', '/jm,/jmg').split(',')
+                if value.strip()
+            ]
             config.write_text(
                 '[plugin]\n'
                 f'enabled = {str(enabled).lower()}\n'
@@ -82,11 +97,15 @@ class NativePool:
                 'client_type = "napcat"\n'
                 f'server = "{server}"\n'
                 f'port = {port}\n'
-                f'token = "{token}"\n', encoding='utf-8')
+                f'token = "{token}"\n\n'
+                '[filters]\n'
+                f'ignored_command_prefixes = {json.dumps(ignored_prefixes, ensure_ascii=False)}\n',
+                encoding='utf-8')
 
     async def ensure_runtime(self, identity, context):
         """Start the normal runtime so WebUI is available before chat."""
         runtime = self.runtime_identity(identity)
+        self.context_templates[runtime] = dict(context)
         async with self.lock:
             entry = self.processes.get(runtime)
             if entry and entry['process'].returncode is None:
@@ -156,7 +175,6 @@ class NativePool:
                 finally:
                     log.close()
                 entry = {'process': process, 'fingerprint': fingerprint, 'last_event': time.time(), 'started': time.time(),
-                         'revision': context['revision'], 'persona_revision': context.get('persona_revision'),
                          'token': runtime_context['runtime_token']}
                 self.processes[identity] = entry
                 # The bounded stdin pipe queues startup input. Readiness is

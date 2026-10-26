@@ -8,8 +8,6 @@ from jmbot.service_rpc import mount_rpc
 
 def mount_download_api(app, driver, queue, state, token, queue_path):
     import os
-    from jmbot.service_rpc import RPCClient, RemoteStore
-    chat_state = RemoteStore(RPCClient(os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'), token), 'state')
     class QQTransport:
         loop = None
 
@@ -47,8 +45,6 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
             if sum(item['type'] in {'face', 'image'} for item in segments) > 1:
                 raise ValueError('at most one face or sticker per reply')
             async def invoke():
-                if not configuration and not await asyncio.to_thread(chat_state.permitted, scope):
-                    raise ValueError('chat permission revoked')
                 bot = get_bot(str(account))
                 kind, owner = scope.split(':')
                 result = await bot.call_api('send_group_msg' if kind == 'group' else 'send_private_msg',
@@ -61,13 +57,11 @@ def mount_download_api(app, driver, queue, state, token, queue_path):
         def send_configuration(self, account, scope, segments, request_id=None):
             if not scope.startswith('private:') or any(item.get('type') != 'text' for item in segments):
                 raise ValueError('configuration replies must be private text')
-            if chat_state.get_policy(scope).chat_blacklisted:
-                raise ValueError('configuration reply blocked')
             return self.send(account, scope, segments, configuration=True, request_id=request_id)
 
         def media(self, account, scope, file):
             from nonebot import get_bot
-            if not chat_state.permitted(scope) or not isinstance(file, str) or len(file) > 512:
+            if not isinstance(file, str) or len(file) > 512:
                 raise ValueError('media denied')
             # NapCat resolves opaque image IDs. Never read arbitrary paths/URLs supplied by messages.
             if '/' in file or '\\' in file or ':' in file:

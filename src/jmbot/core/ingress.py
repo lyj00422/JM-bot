@@ -33,8 +33,6 @@ def classify(event: dict, prefix: str = '/jm') -> Route:
         return Route('drop')
     if post == 'notice' and event.get('sub_type') != 'poke':
         return Route('drop')
-    if kind == 'private' and post == 'message' and event.get('sub_type') != 'friend':
-        return Route('drop')
     owner = event.get('group_id') if kind == 'group' else event.get('user_id')
     if not str(owner or '').isdigit() or int(owner) < 1:
         return Route('drop')

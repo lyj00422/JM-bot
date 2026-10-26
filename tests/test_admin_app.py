@@ -40,6 +40,21 @@ class AdminAppTest(unittest.TestCase):
         self.assertTrue(any(getattr(route, "path", "") == "/api/download/queue/{job_id}/failed" for route in state))
         self.assertTrue(any(getattr(route, "path", "") == "/api/scopes/{kind}/{owner_id}/persona/fields" for route in state))
 
+    def test_retired_chat_controls_are_rejected_and_download_controls_remain(self):
+        with TestClient(self.app) as client:
+            client.post('/api/login', json={'qq_id': SUPER_ADMIN_ID, 'password': 'a-strong-test-password'})
+            headers = {'X-CSRF-Token': client.cookies['jmbot_csrf']}
+            for field in ('chat_enabled', 'chat_blacklisted'):
+                response = client.patch('/api/scopes/group/123/policy', json={field: True}, headers=headers)
+                self.assertEqual(response.status_code, 422)
+            response = client.patch('/api/policies/global/chat', json={'enabled': False}, headers=headers)
+            self.assertEqual(response.status_code, 400)
+            response = client.patch('/api/scopes/group/123/policy', json={'download_enabled': True}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            page = client.get('/').text
+            self.assertNotIn('scope-chat', page)
+            self.assertNotIn('chatInput', page)
+
     def test_native_persona_fields_api_saves_and_rebases(self):
         with TestClient(self.app) as client:
             login = client.post("/api/login", json={"qq_id": SUPER_ADMIN_ID, "password": "a-strong-test-password"})

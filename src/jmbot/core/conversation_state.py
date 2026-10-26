@@ -317,6 +317,10 @@ class ConversationStateStore:
         return int(row[0]) if row else 0
 
     def permitted(self, scope: Scope | str, domain: str = "chat") -> bool:
+        if domain == "chat":
+            # Historical chat switches are archival; MaiBot owns chat access.
+            self._validate_key(scope.key if isinstance(scope, Scope) else scope)
+            return True
         policy = self.get_policy(scope)
         return self.global_enabled(domain) and bool(getattr(policy, domain + "_enabled")) and not bool(getattr(policy, domain + "_blacklisted"))
 
@@ -336,7 +340,7 @@ class ConversationStateStore:
                 "FROM conversation_policies WHERE scope_key=?", (key,)
             ).fetchone()
         if not row:
-            return ScopePolicy(chat_enabled=not key.startswith("group:"), download_enabled=False)
+            return ScopePolicy()
         return ScopePolicy(*(bool(row[column]) for column in (
             "chat_enabled", "download_enabled", "use_default_key", "default_persona", "growth_enabled",
             "chat_blacklisted", "download_blacklisted"
@@ -383,7 +387,7 @@ class ConversationStateStore:
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row_policy = conn.execute("SELECT * FROM conversation_policies WHERE scope_key=?", (key,)).fetchone()
-            current = ScopePolicy(**{name: bool(row_policy[name]) for name in allowed}) if row_policy else ScopePolicy(chat_enabled=key.startswith("private:"))
+            current = ScopePolicy(**{name: bool(row_policy[name]) for name in allowed}) if row_policy else ScopePolicy()
             values = {name: changes.get(name, getattr(current, name)) for name in allowed}
             if not values["default_persona"] and not values["growth_enabled"]:
                 # An explicit per-scope base persona is a third source of truth;

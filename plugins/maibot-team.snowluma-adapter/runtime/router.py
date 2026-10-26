@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Protocol
 import asyncio
 
 from ..config import QQPluginSettings
+from ..ingress_filter import is_ignored_command
 from ..profile import PROFILE_BY_TYPE, probe_client_profile
 from ..types import QQPayloadDict
 from .bundle import QQRuntimeBundle
@@ -51,6 +52,7 @@ class QQEventRouter:
         self._gateway_name = gateway_name
         self._load_settings = load_settings
         self._runtime: Optional[QQRuntimeBundle] = None
+        self._route_lock = asyncio.Lock()
 
     def bind_runtime(self, runtime: QQRuntimeBundle) -> None:
         """绑定当前路由器使用的运行时依赖。
@@ -68,6 +70,22 @@ class QQEventRouter:
         runtime.official_bot_guard.clear_cache()
         runtime.notice_codec.clear_cache()
         runtime.inbound_codec.clear_cache()
+
+    @staticmethod
+    def _message_scope(payload: QQPayloadDict) -> str:
+        """Keep temporary private messages separate from their source group."""
+        group_id = str(payload.get("group_id") or "").strip()
+        is_group = payload.get("message_type") == "group" or (
+            payload.get("post_type") == "notice" and bool(group_id)
+        )
+        if is_group and group_id.isdigit() and int(group_id) > 0:
+            return f"group:{group_id}"
+        sender = payload.get("sender")
+        sender_user_id = sender.get("user_id") if isinstance(sender, Mapping) else ""
+        user_id = str(payload.get("user_id") or sender_user_id or "").strip()
+        if user_id.isdigit() and int(user_id) > 0:
+            return f"private:{user_id}"
+        return ""
 
     async def handle_transport_payload(self, payload: QQPayloadDict) -> None:
         """处理来自传输层的非 echo 载荷。
@@ -103,6 +121,9 @@ class QQEventRouter:
         """
         runtime = self._require_runtime()
         settings = self._load_settings()
+
+        if is_ignored_command(payload, settings.filters.ignored_command_prefixes):
+            return
 
         self_id = str(payload.get("self_id") or "").strip()
         # 普通消息只声明自身归属；连接身份由初始化/生命周期上报，不由消息改写。
@@ -143,14 +164,19 @@ class QQEventRouter:
             return
 
         message_dict["account_id"] = self_id
-        message_dict["scope"] = settings.client.connection_id or None
+        message_scope = self._message_scope(payload)
+        message_dict["scope"] = message_scope or None
         external_message_id = str(payload.get("message_id") or "").strip()
-        accepted = await self._gateway_capability.route_message(
-            gateway_name=self._gateway_name,
-            message=message_dict,
-            external_message_id=external_message_id,
-            dedupe_key=external_message_id,
-        )
+        async with self._route_lock:
+            if message_scope and not await runtime.runtime_state.report_message_scope(message_scope):
+                self._logger.warning(f"无法声明消息作用域，已丢弃消息: {message_scope}")
+                return
+            accepted = await self._gateway_capability.route_message(
+                gateway_name=self._gateway_name,
+                message=message_dict,
+                external_message_id=external_message_id,
+                dedupe_key=external_message_id,
+            )
         if not accepted:
             self._logger.debug(f"Host 丢弃了 入站消息: {external_message_id or '无消息 ID'}")
 
@@ -197,15 +223,20 @@ class QQEventRouter:
             return
 
         message_dict["account_id"] = self_id
-        message_dict["scope"] = connection_id or None
+        message_scope = self._message_scope(payload)
+        message_dict["scope"] = message_scope or connection_id or None
         external_message_id = str(payload.get("message_id") or "").strip()
         dedupe_key = runtime.notice_codec.build_notice_dedupe_key(payload) or ""
-        accepted = await self._gateway_capability.route_message(
-            gateway_name=self._gateway_name,
-            message=message_dict,
-            external_message_id=external_message_id,
-            dedupe_key=dedupe_key,
-        )
+        async with self._route_lock:
+            if message_scope and not await runtime.runtime_state.report_message_scope(message_scope):
+                self._logger.warning(f"无法声明通知作用域，已丢弃通知: {message_scope}")
+                return
+            accepted = await self._gateway_capability.route_message(
+                gateway_name=self._gateway_name,
+                message=message_dict,
+                external_message_id=external_message_id,
+                dedupe_key=dedupe_key,
+            )
         if not accepted:
             self._logger.debug(f"Host 丢弃了 通知事件: {external_message_id or dedupe_key or '无消息 ID'}")
 
@@ -246,7 +277,11 @@ class QQEventRouter:
             should_report_connected = bool(status.get("online", False)) and bool(status.get("good", False))
 
         if self_id and should_report_connected:
-            await runtime.runtime_state.report_connected(self_id, settings.client)
+            await runtime.runtime_state.report_connected(
+                self_id,
+                settings.client,
+                preserve_scope=meta_event_type == "heartbeat",
+            )
         elif meta_event_type == "heartbeat" and not should_report_connected:
             await runtime.runtime_state.report_disconnected()
 

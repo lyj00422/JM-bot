@@ -243,7 +243,7 @@ async def capture_approval_request(event: FriendRequestEvent | GroupRequestEvent
         return
     if isinstance(event, GroupRequestEvent):
         if not CONVERSATION_STORE.has_policy(Scope("group", int(event.group_id))):
-            CONVERSATION_STORE.set_policy(Scope("group", int(event.group_id)), chat_enabled=False, download_enabled=False)
+            CONVERSATION_STORE.set_policy(Scope("group", int(event.group_id)), download_enabled=False)
         await asyncio.to_thread(ADMIN_STORE.upsert_approval,
             "group", str(event.group_id), "pending",
             {"flag": event.flag, "sub_type": event.sub_type, "user_id": event.user_id, "comment": event.comment or ""},
@@ -303,11 +303,8 @@ async def _approval_worker(bot: Bot) -> None:
                     await asyncio.to_thread(ADMIN_STORE.acknowledge_approval, int(action['id']))
                 if action["decision"] == "approve":
                     scope = Scope("private" if action["kind"] == "friend" else "group", int(action["subject_id"]))
-                    if SPLIT_MODE:
-                        if not await asyncio.to_thread(_chat_client.call, "state", "has_policy", scope):
-                            await asyncio.to_thread(_chat_client.call, "state", "set_policy", scope, chat_enabled=action["kind"] == "friend")
-                    elif not CONVERSATION_STORE.has_policy(scope):
-                        CONVERSATION_STORE.set_policy(scope, chat_enabled=action["kind"] == "friend", download_enabled=False)
+                    if not CONVERSATION_STORE.has_policy(scope):
+                        CONVERSATION_STORE.set_policy(scope, download_enabled=False)
             except Exception as error:
                 try:
                     await asyncio.to_thread(ADMIN_STORE.complete_approval_action, int(action["id"]), type(error).__name__)

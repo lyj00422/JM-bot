@@ -190,6 +190,7 @@ JM_BOT_GROUP_FOLDER=JM
 当前聊天链路和本地源码以线上部署为基准，见 [架构状态](docs/architecture-migration-status.md)。MaiBot 原生人设字段、WebUI 与当前 JMbot 人设来源的区别见 [人设说明](docs/maibot-persona.md)。
 
 服务器使用学校 API Key 的接入步骤、iWAN 代理配置与排障见 [在服务器上使用学校 API Key](docs/school-api-on-server.md)。
+若要在另一台服务器上通过 iWAN 让其他 OpenAI 兼容 Bot 调用学校 API，见 [其他 Bot 部署指南](docs/school-api-for-other-bot.md)。
 
 聊天 Key 可在机器人好友私聊中配置自己的私聊服务；机器人管理员可在私聊中指定群聊。命令不区分大小写：
 

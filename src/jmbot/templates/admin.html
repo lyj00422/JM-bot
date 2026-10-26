@@ -172,8 +172,6 @@
     $('refresh-management').onclick = () => Promise.all([loadManagementLinks(), loadQr()]);
     $("refresh-status").onclick = loadStatus;
     setInterval(() => { if (!$("app").hidden) loadStatus(); }, 15000);
-    async function loadGlobalPolicy() { const value = await api("/api/policies/global"); $("global-chat").checked = value.chat; $("global-download").checked = value.download; }
-    $("save-global").onclick = async () => { try { await api("/api/policies/global/chat", { method: "PATCH", body: JSON.stringify({ enabled: $("global-chat").checked }) }); await api("/api/policies/global/download", { method: "PATCH", body: JSON.stringify({ enabled: $("global-download").checked }) }); note("全局开关已保存"); } catch (error) { note(error.message); } };
     async function loadApprovals(status) { try { const rows = await api(`/api/approvals?status=${status}`); $("approval-list").replaceChildren(); rows.forEach((row) => { const div = document.createElement("div"); div.className = "item"; const summary = document.createElement("div"); summary.textContent = `${row.kind === "friend" ? "好友" : "群邀请"} ${row.subject_id}`; const detail = document.createElement("small"); detail.textContent = row.payload.comment || `申请状态：${row.status}`; if (row.apply_state) detail.textContent += ` · NapCat：${row.apply_state}${row.apply_error ? `（${row.apply_error}）` : ""}`; if (row.outcome_unknown) detail.textContent += " · 结果未知，必须先人工核对"; summary.append(detail); div.append(summary); if (status === "pending" || row.outcome_unknown) { const actions = document.createElement("div"); actions.className = "row"; for (const [label, decision] of [["通过", "approved"], ["拒绝", "rejected"]]) { const button = document.createElement("button"); button.textContent = label; button.disabled = status !== "pending"; button.onclick = async () => { try { await api(`/api/approvals/${row.kind}/${encodeURIComponent(row.subject_id)}/${decision}`, { method: "POST" }); note("已排入 NapCat 审批队列"); await loadApprovals(status); } catch (error) { note(error.message); } }; actions.append(button); } if (row.outcome_unknown && row.action_id) { for (const [label, enabled] of [["确认已应用", true], ["确认未应用并重试", false]]) { const button = document.createElement("button"); button.textContent = label; button.onclick = async () => { try { await api(`/api/approvals/actions/${row.action_id}/reconcile`, { method: "POST", body: JSON.stringify({ enabled }) }); note(enabled ? "已标记 NapCat 已应用" : "已允许后台重试"); await loadApprovals(status); } catch (error) { note(error.message); } }; actions.append(button); } } div.append(actions); } $("approval-list").append(div); }); if (!rows.length) $("approval-list").textContent = "没有申请记录"; } catch (error) { note(error.message); } }
     document.querySelectorAll("[data-approval]").forEach((button) => button.onclick = () => loadApprovals(button.dataset.approval));
     async function loadDefaultPersona() { try { const data = await api("/api/persona/default"); $("default-name").value = data.name; $("default-prompt").value = data.prompt; $("default-prompt").dataset.version = data.version; } catch (error) { note(error.message); } }
@@ -182,7 +180,7 @@
       const kind = $("scope-kind").value, owner = $("scope-owner").value;
       try {
         const data = await api(`/api/scopes/${kind}/${owner}`);
-        $("scope-state").innerHTML = `<div class="grid"><label class="check"><input id="scope-chat" type="checkbox" ${data.policy.chat_enabled ? "checked" : ""}>允许聊天</label><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-chat-blacklist" type="checkbox" ${data.policy.chat_blacklisted ? "checked" : ""}>聊天黑名单</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：当前 learner 从最近消息中提炼成长，通过验证后自动生效。冻结条目不再叠加；解冻已固化进基础人设的条目会再次叠加。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
+        $("scope-state").innerHTML = `<p class="muted">聊天权限由 MaiBot 原生后台的适配器规则管理。</p><div class="grid"><label class="check"><input id="scope-download" type="checkbox" ${data.policy.download_enabled ? "checked" : ""}>允许下载</label><label class="check"><input id="scope-download-blacklist" type="checkbox" ${data.policy.download_blacklisted ? "checked" : ""}>下载黑名单</label><label class="check"><input id="scope-default" type="checkbox" ${data.policy.default_persona ? "checked" : ""}>使用默认人设</label><label class="check"><input id="scope-growth" type="checkbox" ${data.policy.growth_enabled ? "checked" : ""}>开启角色成长</label></div><p><button id="save-scope-policy" class="primary">保存开关</button></p><h2>成长条目</h2><p class="muted">自动进行，不需要你指定方向：当前 learner 从最近消息中提炼成长，通过验证后自动生效。冻结条目不再叠加；解冻已固化进基础人设的条目会再次叠加。这里用于查看和审核。</p><div id="growth-entries"></div><details><summary>手动干预（可选）</summary><p class="muted">正常情况下用不到。只有你想手动补一条、或把成长退回到某个版本时才用。</p><label>成长类型<select id="growth-category"><option value="expression">表达习惯</option><option value="interest">兴趣倾向</option><option value="relationship">成员关系</option><option value="experience">共同经历</option></select></label><label>成长内容<input id="growth-content"></label><label>依据<textarea id="growth-evidence"></textarea></label><p><button id="add-growth" class="primary">添加成长条目</button><button id="rollback-growth">回退到指定版本</button><span class="muted">回退 = 停用该版本之后的成长，历史仍保留。</span></p></details>`;
         const list = $("growth-entries");
         data.growth.forEach((entry) => {
           const row = document.createElement("div"); row.className = "item";
@@ -196,7 +194,7 @@
           list.append(row);
         });
         if (!data.growth.length) list.textContent = "还没有成长条目（会话积累消息后会自动生成）";
-        $("save-scope-policy").onclick = async () => { const body = Object.fromEntries([["chat_enabled", "scope-chat"], ["download_enabled", "scope-download"], ["chat_blacklisted", "scope-chat-blacklist"], ["download_blacklisted", "scope-download-blacklist"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked])); try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("会话开关已保存"); } catch (error) { note(error.message); } };
+        $("save-scope-policy").onclick = async () => { const body = Object.fromEntries([["download_enabled", "scope-download"], ["download_blacklisted", "scope-download-blacklist"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked])); try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("会话开关已保存"); } catch (error) { note(error.message); } };
         $("add-growth").onclick = async () => { try { await api(`/api/scopes/${kind}/${owner}/growth`, { method: "POST", body: JSON.stringify({ category: $("growth-category").value, content: $("growth-content").value, evidence: $("growth-evidence").value }) }); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
         $("rollback-growth").onclick = async () => { const version = prompt("回退到哪个版本？该版本之后的成长会停用，历史仍保留。"); if (version === null) return; try { const result = await api(`/api/scopes/${kind}/${owner}/growth/rollback/${Number(version)}`, { method: "POST" }); note(`已停用 ${result.deactivated} 条成长`); await $("load-scope").onclick(); } catch (error) { note(error.message); } };
       } catch (error) { note(error.message); }
@@ -409,19 +407,6 @@
           const name = document.createElement("div");
           name.textContent = scopeLabel(entry.kind, entry.owner, entry.name, entry.remark) + (entry.policy ? "" : "（未配置）");
           const controls = document.createElement("div"); controls.className = "row";
-          const chatBox = document.createElement("label"); chatBox.className = "check";
-          const chatInput = document.createElement("input"); chatInput.type = "checkbox";
-          chatInput.checked = policy.chat_enabled === undefined ? entry.kind === "private" : Boolean(policy.chat_enabled);
-          chatInput.onchange = async () => {
-            chatInput.disabled = true;
-            try {
-              await api(`/api/scopes/${entry.kind}/${entry.owner}/policy`, { method: "PATCH", body: JSON.stringify({ chat_enabled: chatInput.checked }) });
-              note(`${scopeLabel(entry.kind, entry.owner, entry.name, entry.remark)}：聊天功能${chatInput.checked ? "已开启" : "已关闭"}`);
-              await loadPersonaScopes();
-            } catch (error) { chatInput.checked = !chatInput.checked; note(error.message); }
-            finally { chatInput.disabled = false; }
-          };
-          chatBox.append(chatInput, document.createTextNode("允许聊天"));
           const defaultBox = document.createElement("label"); defaultBox.className = "check";
           const defaultInput = document.createElement("input"); defaultInput.type = "checkbox";
           defaultInput.checked = policy.default_persona === undefined ? true : Boolean(policy.default_persona);
@@ -434,7 +419,7 @@
           growthBox.append(growthInput, document.createTextNode("开启角色成长"));
           const edit = document.createElement("button"); edit.textContent = "编辑会话";
           edit.onclick = async () => { $('scope-kind').value = entry.kind; $('scope-owner').value = entry.owner; await $('load-scope').onclick(); $('scope-state').scrollIntoView({ block: 'start' }); };
-          controls.append(chatBox, defaultBox, growthBox, edit);
+          controls.append(defaultBox, growthBox, edit);
           row.append(name, controls);
           box.append(row);
         });
@@ -580,16 +565,14 @@
           if (payload.rebase) payload.seed_snapshot = { personality: payload.personality, behavior_style: payload.behavior_style, reply_style: payload.reply_style };
           try { await api(`/api/scopes/${kind}/${owner}/persona/fields`, { method: "PUT", body: JSON.stringify(payload) }); note(payload.rebase ? "已保存三字段并建立新起点快照" : "三字段人设已保存"); await $("load-scope").onclick(); } catch (error) { note(error.message); }
         };
-        $("save-scope-policy").textContent = "保存聊天开关";
+        $("save-scope-policy").textContent = "保存人设设置";
         $("save-scope-policy").onclick = async () => {
-          const body = Object.fromEntries([["chat_enabled", "scope-chat"], ["chat_blacklisted", "scope-chat-blacklist"], ["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked]));
+          const body = Object.fromEntries([["default_persona", "scope-default"], ["growth_enabled", "scope-growth"]].map(([key, id]) => [key, $(id).checked]));
           body.expected_version = current.policy_version;
-          try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("聊天策略已确认应用"); await $("load-scope").onclick(); } catch (error) { note(error.message); }
+          try { await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify(body) }); note("人设设置已保存"); await $("load-scope").onclick(); } catch (error) { note(error.message); }
         };
       } catch (error) { note(error.message); }
     };
-    loadGlobalPolicy = async () => { const data = await api('/api/policies/global'); for (const name of ['chat', 'download']) { $('global-' + name).indeterminate = data[name] === null; if (data[name] !== null) $('global-' + name).checked = data[name]; } };
-    $('save-global').onclick = async () => { const results = await Promise.allSettled(['chat', 'download'].map(name => api('/api/policies/global/' + name, {method:'PATCH',body:JSON.stringify({enabled:$('global-' + name).checked})}))); note(results.map((value,index) => ['聊天','下载'][index] + (value.status === 'fulfilled' ? '已应用' : '待确认')).join('；')); await loadGlobalPolicy(); };
     $('login-qr-state').textContent = '';
     const qrState = document.createElement('p'); qrState.className = 'muted';
     const qrDetail = document.createElement('pre'); qrDetail.hidden = true;

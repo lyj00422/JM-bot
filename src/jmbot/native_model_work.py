@@ -14,7 +14,6 @@ def install_headers(sessions=None):
         if sessions is not None:
             context = sessions.context()
             result['X-JM-Scope'] = str(context['scope'])
-            result['X-JM-Persona-Version'] = str(context.get('persona_revision', ''))
             from jmbot.native_sessions import current_session_id
             session_id = current_session_id.get() or getattr(client, 'session_id', '')
             if session_id:

@@ -14,15 +14,15 @@
 
 默认 JM_BOT_EMOJI_MODE=selector：文本 Planner 决定发表情后，由独立视觉子代理看最多 8 张候选并返回编号。emoji 任务启用时必须具备 visual 能力，否则需显式配置 vlm。planner 模式使用原生 show_emoji_list 和 reply.attach_emoji，需要 planner 同时具备 visual、tools 能力；只有单独的 vlm 不够。无效编号拒绝发送，单次最多发送一张图片。自动收藏按来源会话持久记录所有权，群间不共享；全局人工审核种子库仅按显式授权可见。
 
-原生表达和黑话学习随该会话 growth_enabled 开关运行，群友事实进入原生长期记忆，机器人自身稳定变化进入角色成长。memory 和 embedding 显式启用才开启 A_Memorix；图片长期记忆还需要 image_embedding。向量内核按会话串行切换，一次仅驻留一个内核，数据根目录隔离。切换内核可能增加记忆任务等待时间。真实模型能力需使用 scripts/probe_model_capabilities.py 对指定服务商发送合成输入验证，不自动改写配置或借用其他服务商凭据。
+聊天运行时的人格、行为风格、回复风格、额外 Prompt、表达学习和黑话学习全部由 MaiBot 原生配置及其 WebUI 管理。JMbot 的旧 growth/persona 表只作为历史数据和一次性迁移来源，不再按会话注入聊天请求。memory 和 embedding 显式启用才开启 A_Memorix；图片长期记忆还需要 image_embedding。向量内核按会话串行切换，一次仅驻留一个内核，数据根目录隔离。切换内核可能增加记忆任务等待时间。真实模型能力需使用 scripts/probe_model_capabilities.py 对指定服务商发送合成输入验证，不自动改写配置或借用其他服务商凭据。
 
-每次点击人设编辑都会重新调用 learner 提炼，返回草稿前原人设继续生效；保存后固化为基础人设并冻结已合并成长，历史保留，随后继续自动成长。提炼和保存都检查内容版本，冲突必须重读。角色候选每积累 30 条新消息才生成，每会话至少间隔 30 分钟，最多一条，要求 bot_self 归因、真实引用与近似去重。后台每分钟检查，新增成长达到 8 条或距上次摘要达到 6 小时时调用模型压缩为最多 1600 字的成长摘要，保留历史；有效提示只追加摘要及最近最多 8 条、合计最多 1200 字的新条目。提炼/模型失败保留原数据。
+旧 JMbot 人设成长记录仍可在后台查看、备份和回退；切换前使用 `scripts/migrate_persona_to_maibot.py` 一次性写入 MaiBot 原生额外 Prompt。切换后编辑和热加载只通过 MaiBot WebUI 完成，JMbot 不再调用 learner、提炼或自动追加成长到聊天 Prompt。历史表不会被删除，迁移失败也不会修改原数据。
 
 单实例、上下文和队列预算用于降低内存压力，不能代替生产 RSS 与峰值负载验收。后续服务器变更计划可包含 2 GiB swap 缓冲；本轮代码交付不创建 swap、不重启服务、不宣称 OOM 已消除。
 
 自动收藏表情单张大小由 JM_BOT_EMOJI_MAX_SIZE_MB 覆盖；未设置时沿用上游默认 5 MiB。当前 QQ 媒体入口最多接受 8 MiB、3200 万像素，因此可配置为 8。JM_BOT_EMOJI_CHECK_INTERVAL_MINUTES 控制上游相关扫描间隔；自写表情维护循环另有 60 秒轮询。JM_BOT_EMOJI_COLLECTION_LIMIT 控制收藏上限，默认 256。发送自定义表情通过 qq_stickers 封装设置 NapCat 原生 image.sub_type=1，并区分发送尝试与确认，避免结果不明时重复发送。
 
-原生实例启动时重新生成 bot_config.toml，且配置 watcher 被接入代码关闭。人设由 JMbot 状态库按会话注入，原生 WebUI 当前关闭；不要直接修改实例配置文件来代替后台人设。原生字段与 WebUI 的关系见 [maibot-persona.md](maibot-persona.md)。
+原生实例启动时先读取现有 `bot_config.toml`，只补充 QQ 传输、作用域隔离和模型网关所需字段，并保留 MaiBot 配置 watcher。人格和聊天额外 Prompt 由 MaiBot WebUI 管理；切换前的人设迁移见 [maibot-persona.md](maibot-persona.md)。
 
 阅读上游 EULA.md 和 PRIVACY.md，再将 JM_BOT_MAIBOT_TERMS_ACCEPTED 设置为锁定 SHA。程序不替使用者自动同意条款。
 

@@ -12,10 +12,20 @@ class SplitAdapter(Adapter):
     worker = None
 
     @classmethod
+    def _commands_only_mode(cls):
+        return os.environ.get('JM_BOT_REVERSE_WS_MODE', '').strip().lower() == 'jm_commands_only'
+
+    @classmethod
     def json_to_event(cls, data):
         if not isinstance(data, dict) or 'post_type' not in data:
             return super().json_to_event(data)
         route = classify(data, os.environ.get('JM_BOT_COMMAND_PREFIX', '/jm'))
+        if cls._commands_only_mode():
+            # In the dual-WS topology, ordinary traffic belongs to the forward
+            # WS connector. NoneBot receives only commands owned by JMbot.
+            if route.domain == 'download':
+                return super().json_to_event(data)
+            return None
         if route.domain in {'drop'}:
             return None
         if route.domain in {'chat', 'credential'}:

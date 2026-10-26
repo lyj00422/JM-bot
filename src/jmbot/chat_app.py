@@ -126,37 +126,24 @@ def create_chat_app():
                     reply = await asyncio.to_thread(command_operation)
                     await send(event, [{'type': 'text', 'data': {'text': reply}}])
                     continue
-                if not state.permitted(route.scope):
-                    continue
                 key, provider = resolve(route.scope)
                 if not key:
                     continue
                 config = routes(provider)
                 await asyncio.to_thread(state.record_source, route.scope, str(event.get('message_id', '')), str(event['user_id']), text_of(event), event.get('time', time.time()))
-                revision = state.authorization_revision(route.scope)
-                policy = state.get_policy(route.scope)
-                persona_fields = state.effective_persona_fields(route.scope, state.get_default_persona('', '')[1])
                 credential_digest = hashlib.sha256(key.encode()).hexdigest()
-                grant_key = identity + ':' + str(revision) + ':' + provider + ':' + credential_digest
+                grant_key = identity + ':' + provider + ':' + credential_digest
                 grant = grants.get(grant_key)
                 if grant is None:
                     grant = {'token': secrets.token_urlsafe(32), 'scope': route.scope, 'identity': identity,
-                             'account': str(event['self_id']), 'revision': revision, 'provider': provider, 'credential_digest': credential_digest}
+                             'account': str(event['self_id']), 'provider': provider, 'credential_digest': credential_digest}
                     grants[grant_key] = grant
                 context = {'scope': route.scope, 'account': str(event['self_id']), 'identity': identity,
-                           'token': grant['token'], 'revision': revision,
+                           'token': grant['token'],
                            'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
-                           'persona': state.effective_persona(route.scope, state.get_default_persona('', '')[1]),
-                           'behavior_style': persona_fields.get('behavior_style', ''),
-                           'reply_style': persona_fields.get('reply_style', ''),
-                           'seed_source': persona_fields.get('seed_source', 'imported'),
-                           'seed_source_revision': persona_fields.get('seed_source_revision', ''),
-                           'seed_snapshot': persona_fields.get('seed_snapshot', {}),
-                           'persona_version': persona_fields.get('persona_version', 0),
-                           'persona_revision': state.persona_revision(route.scope),
-                           'growth_enabled': policy.growth_enabled, 'tasks': config['tasks'],
+                           'tasks': config['tasks'],
                            'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
-                           'emoji_mode': os.environ.get('JM_BOT_EMOJI_MODE', 'selector')}
+                           }
                 if route.direct:
                     grant['priority_until'] = time.monotonic() + 180
                 context['write_barrier'] = str((data / 'policy-write.lock').resolve())
@@ -176,11 +163,6 @@ def create_chat_app():
                     pool.errors[identity] = {'type': 'startup_failed', 'at': time.time()}
                     await pool.stop(identity)
                     continue
-            # Session policy/content is refreshed through the authenticated
-            # context endpoint, never by terminating another group's runtime.
-            for key, grant in list(grants.items()):
-                if grant['revision'] != state.authorization_revision(grant['scope']):
-                    grants.pop(key, None)
             try:
                 await asyncio.to_thread(admins.heartbeat, 'jmbot-chat', True, 'native instances=' + str(len(pool.processes)))
             except Exception:
@@ -202,13 +184,10 @@ def create_chat_app():
         context = {
             'scope': 'private:1', 'account': account,
             'identity': 'qq:' + account + ':private:1',
-            'token': secrets.token_urlsafe(32), 'revision': 'bootstrap',
+            'token': secrets.token_urlsafe(32),
             'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
-            'persona': state.get_default_persona('大肥鱼', '')[1],
-            'persona_revision': state.persona_revision('private:1'),
-            'growth_enabled': False, 'tasks': config['tasks'],
+            'tasks': config['tasks'],
             'route_identity': hashlib.sha256((provider + ':' + config['base_url']).encode()).hexdigest()[:16],
-            'emoji_mode': os.environ.get('JM_BOT_EMOJI_MODE', 'selector'),
             'write_barrier': str((data / 'policy-write.lock').resolve()),
         }
         try:
@@ -249,8 +228,8 @@ def create_chat_app():
     def grant_for(request):
         bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
         grant = next((item for item in grants.values() if secrets.compare_digest(item['token'], bearer)), None)
-        if not grant or not state.permitted(grant['scope']) or state.authorization_revision(grant['scope']) != grant['revision']:
-            raise HTTPException(403, 'scope policy changed or access revoked')
+        if not grant:
+            raise HTTPException(403, 'invalid scope grant')
         worker = pool.processes.get(pool.runtime_identity(grant['identity']))
         delivered = pool.scopes.get(grant['identity'], {}).get('context', {})
         if not worker or worker.get('stopping') or delivered.get('token') != bearer or worker['process'].returncode is not None:
@@ -290,30 +269,47 @@ def create_chat_app():
 
     def _runtime_scope_context(identity: str, scope: str) -> dict:
         scope = ConversationStateStore._validate_key(scope)
-        if not state.permitted(scope):
-            raise HTTPException(403, 'scope policy disabled')
         account = identity.split(':', 2)[1]
-        fields = state.effective_persona_fields(scope, state.get_default_persona('', '')[1])
         return {
             'scope': scope,
             'account': account,
             'enabled': True,
-            'policy_revision': state.authorization_revision(scope),
-            'persona_revision': state.persona_revision(scope),
-            'persona_version': fields.get('persona_version', 0),
-            'persona': fields.get('personality') or state.get_default_persona('', '')[1],
-            'behavior_style': fields.get('behavior_style', ''),
-            'reply_style': fields.get('reply_style', ''),
-            'seed_source': fields.get('seed_source', 'imported'),
-            'seed_source_revision': fields.get('seed_source_revision', ''),
-            'seed_snapshot': fields.get('seed_snapshot', {}),
-            'growth_enabled': state.get_policy(scope).growth_enabled,
         }
+
+    def _ensure_runtime_scope_context(runtime_identity: str, scope: str) -> dict:
+        """Create a normal scoped grant for messages received inside MaiBot."""
+        scope = ConversationStateStore._validate_key(scope)
+        account = runtime_identity.split(':', 2)[1]
+        scope_identity = f'qq:{account}:{scope}'
+        key, provider = resolve(scope)
+        if not key:
+            raise HTTPException(409, 'credential unavailable')
+        route = routes(provider)
+        digest = hashlib.sha256(key.encode()).hexdigest()
+        grant_key = scope_identity + ':' + provider + ':' + digest
+        grant = grants.get(grant_key)
+        if grant is None:
+            grant = {'token': secrets.token_urlsafe(32), 'scope': scope, 'identity': scope_identity,
+                     'account': account, 'provider': provider, 'credential_digest': digest}
+            grants[grant_key] = grant
+        template = dict(pool.context_templates.get(runtime_identity, {}))
+        context = {
+            **template,
+            'scope': scope,
+            'account': account,
+            'identity': scope_identity,
+            'token': grant['token'],
+            'gateway': os.environ.get('JM_BOT_CHAT_SERVICE_URL', 'http://127.0.0.1:8082'),
+            'tasks': route['tasks'],
+            'route_identity': hashlib.sha256((provider + ':' + route['base_url']).encode()).hexdigest()[:16],
+        }
+        pool.scopes[scope_identity] = {'context': context, 'last_event': time.time()}
+        return context
 
     @app.get('/native/policy/{kind}/{owner}')
     async def native_policy(kind: str, owner: int, request: Request):
         identity, _ = _runtime_entry(request)
-        return _runtime_scope_context(identity, f'{kind}:{owner}')
+        return _ensure_runtime_scope_context(identity, f'{kind}:{owner}')
 
     @app.get('/native/session-context/{session_id}')
     async def native_session_context(session_id: str, request: Request):
@@ -333,12 +329,7 @@ def create_chat_app():
     async def native_context(request: Request):
         grant, _ = grant_for(request)
         context = dict(pool.scopes[grant['identity']]['context'])
-        context.update(persona=state.effective_persona(grant['scope'], state.get_default_persona('', '')[1]),
-                       **{key: value for key, value in state.effective_persona_fields(grant['scope'], state.get_default_persona('', '')[1]).items()
-                          if key in {'behavior_style', 'reply_style', 'seed_source', 'seed_source_revision', 'seed_snapshot', 'persona_version'}},
-                       persona_revision=state.persona_revision(grant['scope']),
-                       growth_enabled=state.get_policy(grant['scope']).growth_enabled,
-                       tasks=routes(grant['provider'])['tasks'],
+        context.update(tasks=routes(grant['provider'])['tasks'],
                        route_identity=hashlib.sha256((grant['provider'] + ':' + routes(grant['provider'])['base_url']).encode()).hexdigest()[:16])
         return context
 
@@ -440,17 +431,12 @@ def create_chat_app():
         declared_scope = request.headers.get('x-jm-scope', '').strip()
         if declared_scope and declared_scope != grant['scope']:
             raise HTTPException(403, 'model scope metadata mismatch')
-        declared_persona = request.headers.get('x-jm-persona-version', '').strip()
-        if declared_persona and declared_persona != state.persona_revision(grant['scope']):
-            raise HTTPException(409, 'persona changed during model request')
         capture_enabled = os.environ.get('JM_BOT_CAPTURE_PROMPTS', '').lower() in {'1', 'true', 'yes', 'on'}
         if capture_enabled:
             capture_dir = data / 'prompt-captures'
             capture_dir.mkdir(parents=True, exist_ok=True)
             capture = {
                 'scope': grant['scope'],
-                'persona_revision': state.persona_revision(grant['scope']),
-                'persona_version': state.effective_persona_fields(grant['scope'], state.get_default_persona('', '')[1]).get('persona_version', 0),
                 'session_id': request.headers.get('x-jm-session-id', ''),
                 'task': task,
                 'workload': workload,
@@ -462,10 +448,9 @@ def create_chat_app():
         sticker = workload == 'sticker'
         background = workload == 'background' or task in {'memory', 'mid_memory', 'learner', 'embedding', 'image_embedding'}
         if sticker:
-            try:
-                body['max_tokens'] = min(int(body.get('max_tokens', 1024)), 1024)
-            except (TypeError, ValueError):
-                raise HTTPException(400, 'invalid max_tokens') from None
+            # Keep native budget, sampling and reasoning settings; only require
+            # the final selection protocol consumed by the sticker parser.
+            body['response_format'] = {'type': 'json_object'}
         queued_at = time.monotonic()
         for message in body.get('messages', []):
             if isinstance(message.get('content'), list) and any(part.get('type') in {'image_url', 'input_image'} for part in message['content'] if isinstance(part, dict)) and not binding.get('visual', task == 'vlm'):
@@ -513,10 +498,7 @@ def create_chat_app():
             scope = ConversationStateStore._validate_key(scope)
             async def invoke():
                 import httpx
-                if not state.permitted(scope):
-                    raise ValueError('scope not permitted')
                 key, provider = resolve(scope)
-                revision = state.authorization_revision(scope)
                 route = routes(provider)
                 binding = route['tasks'].get('vlm', {})
                 if not key or not binding.get('enabled', False) or not binding.get('model'):
@@ -530,13 +512,11 @@ def create_chat_app():
                     task_semaphore = task_limits.setdefault((provider, 'vlm', binding.get('concurrency', 1)), asyncio.Semaphore(binding.get('concurrency', 1)))
                     background = background_limits.setdefault(provider, asyncio.Semaphore(1))
                     async with background, task_semaphore, semaphore, httpx.AsyncClient(timeout=45, trust_env=False, proxy=chat_proxy()) as client:
-                        if not state.permitted(scope):
-                            raise ValueError('scope revoked')
                         response = await client.post(route['base_url'].rstrip('/') + '/chat/completions', headers={'Authorization': 'Bearer ' + key}, json={'model': binding['model'], 'messages': [{'role': 'user', 'content': content}], 'max_tokens': 3000, 'temperature': 0})
                         response.raise_for_status()
                         candidates = json.loads(response.json()['choices'][0]['message']['content'])
-                    if not state.permitted(scope) or state.authorization_revision(scope) != revision or resolve(scope) != (key, provider):
-                        raise ValueError('scope or credential changed during draft generation')
+                    if resolve(scope) != (key, provider):
+                        raise ValueError('credential changed during draft generation')
                     if not isinstance(candidates, list) or len(candidates) != len(data['stickers']):
                         raise ValueError('invalid semantic draft')
                     edits = []

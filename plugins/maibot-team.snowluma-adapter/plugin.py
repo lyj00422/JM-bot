@@ -851,10 +851,12 @@ class SnowLumaAdapterPlugin(
 
     @MessageGateway(
         name=SNOWLUMA_GATEWAY_NAME,
-        route_type="duplex",
+        # MaiBot's native scoped driver owns outbound delivery. Keeping this
+        # gateway receive-only prevents the same reply from being sent twice.
+        route_type="receive",
         platform="qq",
         protocol="snowluma",
-        description="SnowLuma / NapCat 正向 WebSocket 双工消息网关",
+        description="SnowLuma / NapCat 正向 WebSocket 入站消息网关",
     )
     async def handle_snowluma_gateway(
         self,
