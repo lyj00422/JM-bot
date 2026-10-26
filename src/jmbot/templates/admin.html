@@ -79,6 +79,7 @@
         <button data-page="monitor" class="active">状态</button>
         <button data-page="native">原生管理入口</button>
         <div class="nav-group"><span>下载</span>
+          <button data-page="download-perms">会话权限</button>
           <button data-page="download-queue">队列</button>
           <button data-page="download-help">帮助文本</button>
         </div>
@@ -124,6 +125,7 @@
       document.querySelectorAll(".section").forEach((item) => item.classList.toggle("active", item.id === `page-${page}`));
       if (page === "admins") loadAdmins();
       if (page === "native") { loadManagementLinks(); loadQr(); }
+      if (page === "download-perms") loadDownloadStatus();
       if (page === "download-queue") loadDownloadQueue();
       if (page === "download-help") loadHelp();
     });
@@ -207,9 +209,20 @@
         const names = new Map();
         for (const group of roster.groups || []) names.set(`group:${group.group_id}`, group.group_remark || group.group_name || "");
         for (const friend of roster.friends || []) names.set(`private:${friend.user_id}`, friend.remark || friend.nickname || "");
+        const policies = new Map(rows.map((scope) => [String(scope.scope_key), scope]));
+        // Show every current group/friend, including scopes without a saved
+        // policy. Unconfigured download access is closed by default, and the
+        // first toggle creates the policy through the same endpoint.
+        for (const scopeKey of names.keys()) {
+          if (!policies.has(scopeKey)) policies.set(scopeKey, {
+            scope_key: scopeKey,
+            download_enabled: false,
+            download_blacklisted: false,
+          });
+        }
         const kindFilter = $("download-kind-filter").value;
         const search = $("download-search").value.trim();
-        const visible = rows.filter((scope) => {
+        const visible = [...policies.values()].filter((scope) => {
           const [kind, owner] = String(scope.scope_key).split(":");
           if (kindFilter && kind !== kindFilter) return false;
           if (!search) return true;
@@ -226,10 +239,12 @@
             const button = document.createElement("button");
             button.textContent = `${title}${scope[key] ? "：开" : "：关"}`;
             button.onclick = async () => {
+              button.disabled = true;
               try {
                 await api(`/api/scopes/${kind}/${owner}/policy`, { method: "PATCH", body: JSON.stringify({ [key]: !scope[key] }) });
                 await loadDownloadStatus();
-              } catch (error) { note(error.message); }
+                note(`${label.textContent}：${title}${!scope[key] ? "已开启" : "已关闭"}`);
+              } catch (error) { note(error.message); button.disabled = false; }
             };
             controls.append(button);
           }
